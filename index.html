@@ -40,6 +40,9 @@ main { max-width: 30rem; margin: 0 auto; display: flex; flex-direction: column; 
 .red { color: var(--red); }
 
 .top { display: flex; justify-content: space-between; color: var(--muted); font-size: 14px; }
+.top > div:last-child { text-align: right; }
+.top > div { line-height: 1.5; }
+.top b { color: var(--text); font-weight: 600; }
 .hero { text-align: center; }
 .hero .big { font-size: 52px; font-weight: 700; letter-spacing: -.02em; line-height: 1.05; color: var(--green); }
 .hero .big.red { color: var(--red); }
@@ -103,7 +106,10 @@ details[open] summary::after { content: "Done"; }
 </head>
 <body>
 <main>
-  <div class="top"><span id="monthName"></span><span id="weekName"></span></div>
+  <div class="top">
+    <div><span id="monthName"></span><br><span id="spent"></span></div>
+    <div><span id="weekName"></span><br><span id="weekDates"></span></div>
+  </div>
 
   <div class="hero">
     <div class="big num" id="left"></div>
@@ -269,7 +275,9 @@ details[open] summary::after { content: "Done"; }
   function render() {
     const r = compute(), w = r.weeks[r.cur];
     $('#monthName').textContent = `${md(r.p.start)} – ${md(r.p.end)}`;
-    $('#weekName').textContent = `Week ${r.cur + 1} of 4 · ${md(w.start)} – ${md(w.end)}`;
+    $('#weekName').textContent = `Week ${r.cur + 1} of 4`;
+    $('#weekDates').textContent = `${md(w.start)} – ${md(w.end)}`;
+    $('#spent').innerHTML = `<b class="num">${m(r.total)}</b> spent`;
 
     $('#left').textContent = m(w.left);
     $('#left').classList.toggle('red', w.left < -0.004);
@@ -279,7 +287,7 @@ details[open] summary::after { content: "Done"; }
       `<div class="wk${i < r.cur ? ' past' : ''}${i === r.cur ? ' now' : ''}"><small>W${i + 1}</small><b class="num${x.left < -0.4 ? ' red' : ''}">${m0(x.left)}</b></div>`).join('');
 
     const ml = r.free - r.total;
-    $('#monthLeft').innerHTML = `${m(r.total)} spent · <span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left until ${md(r.p.next)}`;
+    $('#monthLeft').innerHTML = `<span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left until ${md(r.p.next)}`;
 
     const items = [...r.list].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
     $('#purchases').innerHTML = items.length ? items.map(p => {
