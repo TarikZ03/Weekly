@@ -91,7 +91,7 @@ details[open] summary::after { content: "Done"; }
 #avgBox summary, #invBox summary { color: var(--text); font-weight: 600; }
 #avgBox summary::after, #invBox summary::after { content: "Show"; }
 #avgBox[open] summary::after, #invBox[open] summary::after { content: "Hide"; }
-.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; background: var(--soft); border-radius: 8px; padding: 3px; }
+.seg { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; background: var(--soft); border-radius: 8px; padding: 3px; }
 .seg button { padding: 7px 4px; border-radius: 6px; font-size: 14px; color: var(--muted); }
 .seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
 .sub-h { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
@@ -165,16 +165,12 @@ details[open] summary::after { content: "Done"; }
       <div class="seg" id="invKind">
         <button type="button" data-kind="buy" class="on">Buy</button>
         <button type="button" data-kind="sell">Sell</button>
-        <button type="button" data-kind="value">Value now</button>
       </div>
       <form id="invForm" class="setup" style="margin:0" autocomplete="off">
         <div class="row" id="invTrade">
           <input id="iShares" class="num" inputmode="decimal" placeholder="Shares" aria-label="Shares">
           <input id="iPrice" class="num" inputmode="decimal" placeholder="Price/share" aria-label="Price per share">
           <input id="iFees" class="num" inputmode="decimal" placeholder="Fees" aria-label="Fees">
-        </div>
-        <div class="row" id="invValueRow" hidden>
-          <input id="iValue" class="num" inputmode="decimal" placeholder="What all your shares are worth now (€)" aria-label="Value now">
         </div>
         <div class="row"><span class="hint" id="invHint"></span><button class="add" type="submit">Add</button></div>
       </form>
@@ -217,7 +213,7 @@ details[open] summary::after { content: "Done"; }
     sync: raw.sync || { url: '', key: '' },   // Google Sheet sync settings, only ever stored on this device
     queue: Array.isArray(raw.queue) ? raw.queue : [],  // changes not yet sent to the sheet
     avg: raw.avg || { range: '4', from: '', to: '' },  // chosen Averages range (this device only)
-    inv: Array.isArray(raw.inv) ? raw.inv : [],  // investment entries: buy / sell / value
+    inv: Array.isArray(raw.inv) ? raw.inv : [],  // investment entries: buy / sell
   };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 
@@ -229,6 +225,7 @@ details[open] summary::after { content: "Done"; }
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const parseAmt = v => { const n = parseFloat(String(v).replace(/[€\s]/g, '').replace(',', '.')); return isFinite(n) ? Math.round(n * 100) / 100 : NaN; };
+  const parseNum = v => { const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.')); return isFinite(n) ? n : NaN; };  // no rounding: fractional shares
   const pad = n => String(n).padStart(2, '0');
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   // Recurring expenses are counted per month: €120 yearly = €10 a month.
@@ -334,40 +331,35 @@ details[open] summary::after { content: "Done"; }
 
   // ---------- investments ----------
   // buy: you put in shares × price + fees. sell: you take out shares × price − fees.
-  // value: what all your shares are worth that day. Gain/loss = latest value + taken out − put in.
   let invKind = 'buy';
-  const invAmt = e => e.kind === 'buy' ? e.shares * e.price + e.fees : e.kind === 'sell' ? e.shares * e.price - e.fees : e.value;
+  const invAmt = e => e.kind === 'buy' ? e.shares * e.price + e.fees : e.shares * e.price - e.fees;
+  const trades = () => S.inv.filter(e => e.kind === 'buy' || e.kind === 'sell');  // ignores old "value" entries
   const signed = n => (n > 0.004 ? '+' : '') + m(n);
   function renderInv(p) {
     const sum = (list, kind) => list.filter(e => e.kind === kind).reduce((a, e) => a + invAmt(e), 0);
-    const inPeriod = S.inv.filter(e => e.date >= p.from && e.date <= p.to);
+    const all = trades(), inPeriod = all.filter(e => e.date >= p.from && e.date <= p.to);
     const spent = S.purchases.filter(x => x.date >= p.from && x.date <= p.to).reduce((a, x) => a + x.amount, 0);
-    const byTime = [...S.inv].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
-    const last = byTime.find(e => e.kind === 'value');
+    const byTime = [...all].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
     const row = (label, val, cls = '') => `<li><div class="mid"><div>${label}</div></div><div class="end num ${cls}">${val}</div></li>`;
     let html = `<li class="sub-h">This period (${md(p.start)} – ${md(p.end)})</li>`
       + row('Put in', m(sum(inPeriod, 'buy'))) + row('Taken out', m(sum(inPeriod, 'sell'))) + row('Spent on purchases', m(spent))
       + '<li class="sub-h">All time</li>';
-    if (last) {
-      const gain = last.value + sum(S.inv, 'sell') - sum(S.inv, 'buy');
-      html += row(`Worth now <small class="muted">(${md(day(last.date))})</small>`, m(last.value))
-        + row('Gain / loss', signed(gain), gain < -0.004 ? 'red' : gain > 0.004 ? 'green' : '');
-    } else {
-      html += row('Put in', m(sum(S.inv, 'buy'))) + row('Taken out', m(sum(S.inv, 'sell')))
-        + '<li class="empty">Add a "Value now" to see your gain or loss.</li>';
-    }
+    const held = all.reduce((a, e) => a + (e.kind === 'buy' ? e.shares : -e.shares), 0);
+    const net = sum(all, 'sell') - sum(all, 'buy');
+    html += row('Put in', m(sum(all, 'buy'))) + row('Taken out', m(sum(all, 'sell')))
+      + row('Shares still held', String(Math.round(held * 1e6) / 1e6))
+      + row('Taken out − put in', signed(net), net < -0.004 ? 'red' : net > 0.004 ? 'green' : '');
     $('#invStats').innerHTML = html;
     $('#invList').innerHTML = (byTime.length ? '<li class="sub-h">Entries</li>' : '') + byTime.slice(0, 12).map(e => {
-      const what = e.kind === 'value' ? 'Value now'
-        : `${e.kind === 'buy' ? 'Buy' : 'Sell'} · ${e.shares} × ${m(e.price)}${e.fees ? ` ${e.kind === 'buy' ? '+' : '−'} ${m(e.fees)} fees` : ''}`;
+      const what = `${e.kind === 'buy' ? 'Buy' : 'Sell'} · ${e.shares} × ${m(e.price)}${e.fees ? ` ${e.kind === 'buy' ? '+' : '−'} ${m(e.fees)} fees` : ''}`;
       return `<li><div class="mid"><div>${what}</div><small>${md(day(e.date))}</small></div>
         <span class="num">${e.kind === 'sell' ? '+' : ''}${m(invAmt(e))}</span><button class="x" type="button" data-delinv="${e.id}" aria-label="Delete">×</button></li>`;
     }).join('');
     invHint();
   }
   function invHint() {
-    const sh = parseAmt($('#iShares').value), pr = parseAmt($('#iPrice').value), fe = parseAmt($('#iFees').value) || 0;
-    $('#invHint').textContent = invKind !== 'value' && sh > 0 && pr > 0
+    const sh = parseNum($('#iShares').value), pr = parseAmt($('#iPrice').value), fe = parseAmt($('#iFees').value) || 0;
+    $('#invHint').textContent = sh > 0 && pr > 0
       ? (invKind === 'buy' ? `You put in ${m(sh * pr + fe)}` : `You get ${m(sh * pr - fe)}`) : '';
   }
 
@@ -492,23 +484,17 @@ details[open] summary::after { content: "Done"; }
     if (!k) return;
     invKind = k;
     document.querySelectorAll('#invKind button').forEach(b => b.classList.toggle('on', b.dataset.kind === k));
-    $('#invTrade').hidden = k === 'value'; $('#invValueRow').hidden = k !== 'value';
     invHint();
   });
   ['#iShares', '#iPrice', '#iFees'].forEach(id => $(id).addEventListener('input', invHint));
   $('#invForm').addEventListener('submit', e => {
     e.preventDefault();
-    const entry = { id: uid(), date: iso(new Date()), kind: invKind, shares: 0, price: 0, fees: 0, value: 0, t: String(Date.now()) };
-    if (invKind === 'value') {
-      entry.value = parseAmt($('#iValue').value);
-      if (!(entry.value >= 0)) { $('#iValue').focus(); return; }
-    } else {
-      entry.shares = parseAmt($('#iShares').value); entry.price = parseAmt($('#iPrice').value); entry.fees = parseAmt($('#iFees').value) || 0;
-      if (!(entry.shares > 0)) { $('#iShares').focus(); return; }
-      if (!(entry.price > 0)) { $('#iPrice').focus(); return; }
-    }
+    const entry = { id: uid(), date: iso(new Date()), kind: invKind, shares: parseNum($('#iShares').value),
+      price: parseAmt($('#iPrice').value), fees: parseAmt($('#iFees').value) || 0, value: 0, t: String(Date.now()) };
+    if (!(entry.shares > 0)) { $('#iShares').focus(); return; }
+    if (!(entry.price > 0)) { $('#iPrice').focus(); return; }
     S.inv.push(entry); save(); queue({ type: 'inv', e: entry });
-    ['#iShares', '#iPrice', '#iFees', '#iValue'].forEach(id => $(id).value = '');
+    ['#iShares', '#iPrice', '#iFees'].forEach(id => $(id).value = '');
     render();
   });
   $('#invList').addEventListener('click', e => {
