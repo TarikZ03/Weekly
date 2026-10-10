@@ -22,9 +22,10 @@ Upload the changed files again. The app picks up the new version the second time
 If you change `sw.js`'s file list, bump `CACHE` in `sw.js`.
 
 ## Google Sheet sync (optional)
-Every purchase you add or delete, and every change to income/expenses, is copied into a private
-Google Sheet in your own account. Changes made offline are sent once you're back online.
-It's write-only: the script never sends your purchases back out, only this week's totals (for a widget).
+Every purchase you add or delete, and every change to income/expenses, is saved in a private
+Google Sheet in your own account, and every device connected to it shows the same data. Changes made
+offline are sent once you're back online. Anyone with both the URL and the key can read the data,
+so keep those two private.
 
 1. Go to https://sheets.new and give the sheet a name.
 2. Extensions → Apps Script. Delete what's there, paste in all of `sync.gs`.

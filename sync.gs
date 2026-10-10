@@ -1,17 +1,18 @@
-// Weekly → Google Sheet sync.
+/** @OnlyCurrentDoc */
+// Weekly ↔ Google Sheet sync.
 // Paste this into a blank Google Sheet: Extensions → Apps Script. Setup steps are in README.md.
 //
-// Write-only on purpose: the app can add/delete purchases and update the budget, but nothing
-// here ever sends your purchases back out. The only thing it returns is this week's totals
-// (for a widget), and only with the right key.
+// Two-way: the app sends its changes, and gets the whole sheet back in return, so every device
+// shows the same data. Nothing works without the key.
 
 const KEY = 'CHANGE-ME';  // replace with your own long random text, and enter the same text in the app
 
 const PURCHASES = 'Purchases', BUDGET = 'Budget';
-const P_HEAD = ['id', 'date', 'name', 'category', 'amount', 'spread'];
+const P_HEAD = ['id', 'date', 'name', 'category', 'amount', 'spread', 'added'];
 const B_HEAD = ['type', 'name', 'amount'];
 
 // Receives a batch of changes from the app: { key, ops: [{type:'add', p}, {type:'del', id}, {type:'budget', income, bills}] }
+// and answers with everything in the sheet: { ok, purchases, hasBudget, income, bills }.
 function doPost(e) {
   let body;
   try { body = JSON.parse(e.postData.contents); } catch (err) { return out({ ok: false, error: 'bad request' }); }
@@ -21,33 +22,42 @@ function doPost(e) {
   lock.waitLock(20000);
   try {
     const ss = SpreadsheetApp.getActive();
-    const P = sheet(ss, PURCHASES, P_HEAD);
-    const rows = read(P, P_HEAD.length);
-    const at = new Map(rows.map((r, i) => [String(r[0]), i]));
-    const gone = new Set();
-    let budget = null;
+    const P = sheet(ss, PURCHASES, P_HEAD), B = sheet(ss, BUDGET, B_HEAD);
+    const ops = body.ops || [];
 
-    for (const op of body.ops || []) {
-      if (op.type === 'add' && op.p && op.p.id) {
-        const p = op.p;
-        const row = [p.id, p.date, text(p.note), text(p.cat), Number(p.amount) || 0, p.spread ? 'yes' : 'no'];
-        if (at.has(p.id)) { rows[at.get(p.id)] = row; gone.delete(at.get(p.id)); }
-        else { at.set(p.id, rows.length); rows.push(row); }
-      } else if (op.type === 'del' && at.has(op.id)) {
-        gone.add(at.get(op.id));
-      } else if (op.type === 'budget') {
-        budget = op;
+    if (ops.length) {
+      const rows = read(P, P_HEAD.length);
+      const at = new Map(rows.map((r, i) => [String(r[0]), i]));
+      const gone = new Set();
+      let budget = null;
+      for (const op of ops) {
+        if (op.type === 'add' && op.p && op.p.id) {
+          const p = op.p;
+          const row = [p.id, p.date, text(p.note), text(p.cat), Number(p.amount) || 0, p.spread ? 'yes' : 'no', String(p.t || '')];
+          if (at.has(p.id)) { rows[at.get(p.id)] = row; gone.delete(at.get(p.id)); }
+          else { at.set(p.id, rows.length); rows.push(row); }
+        } else if (op.type === 'del' && at.has(op.id)) {
+          gone.add(at.get(op.id));
+        } else if (op.type === 'budget') {
+          budget = op;
+        }
+      }
+      write(P, rows.filter((_, i) => !gone.has(i)), P_HEAD.length);
+      if (budget) {
+        write(B, [['income', 'Monthly income', Number(budget.income) || 0]]
+          .concat((budget.bills || []).map(b => ['expense', text(b.name), Number(b.amount) || 0])), B_HEAD.length);
       }
     }
-    write(P, rows.filter((_, i) => !gone.has(i)), P_HEAD.length);
 
-    if (budget) {
-      const B = sheet(ss, BUDGET, B_HEAD);
-      const bRows = [['income', 'Monthly income', Number(budget.income) || 0]]
-        .concat((budget.bills || []).map(b => ['expense', text(b.name), Number(b.amount) || 0]));
-      write(B, bRows, B_HEAD.length);
-    }
-    return out({ ok: true });
+    const tz = ss.getSpreadsheetTimeZone();
+    const purchases = read(P, P_HEAD.length).map(r => ({
+      id: String(r[0]), date: day(r[1], tz), note: String(r[2]), cat: String(r[3]),
+      amount: Number(r[4]) || 0, spread: r[5] === 'yes', t: String(r[6]),
+    }));
+    const bRows = read(B, B_HEAD.length);
+    const inc = bRows.find(r => r[0] === 'income');
+    const bills = bRows.filter(r => r[0] === 'expense').map(r => ({ name: String(r[1]), amount: Number(r[2]) || 0 }));
+    return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, bills });
   } finally {
     lock.releaseLock();
   }
@@ -73,7 +83,7 @@ function summary() {
   const free = income - fixed, allow = [1, 2, 3, 4].map(() => free / 4), spent = [0, 0, 0, 0];
   let total = 0;
   for (const r of read(sheet(ss, PURCHASES, P_HEAD), P_HEAD.length)) {
-    const ds = r[1] instanceof Date ? Utilities.formatDate(r[1], tz, 'yyyy-MM-dd') : String(r[1]);
+    const ds = day(r[1], tz);
     if (!ds.startsWith(month)) continue;
     const k = weekOf(ds), amt = Number(r[4]) || 0;
     total += amt;
@@ -86,7 +96,8 @@ function summary() {
 
 function sheet(ss, name, head) {
   let s = ss.getSheetByName(name);
-  if (!s) { s = ss.insertSheet(name); s.appendRow(head); s.setFrozenRows(1); }
+  if (!s) { s = ss.insertSheet(name); s.setFrozenRows(1); }
+  s.getRange(1, 1, 1, head.length).setValues([head]);
   return s;
 }
 function read(s, cols) {
@@ -95,6 +106,10 @@ function read(s, cols) {
 function write(s, rows, cols) {
   if (s.getLastRow() > 1) s.getRange(2, 1, s.getLastRow() - 1, cols).clearContent();
   if (rows.length) s.getRange(2, 1, rows.length, cols).setValues(rows);
+}
+// Sheets turns "2026-10-10" into a date; turn it back into text.
+function day(v, tz) {
+  return v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(v);
 }
 // Stop names like "=SUM(...)" being treated as formulas.
 function text(v) {

@@ -236,6 +236,7 @@ details[open] summary::after { content: "Done"; }
 
   // ---------- Google Sheet sync (see sync.gs) ----------
   // Every change is queued on the device and sent in batches, so nothing is lost while offline.
+  // Each sync gets the whole sheet back, so all devices show the same data.
   let syncing = false, syncTimer, syncErr = '';
   const syncOn = () => !!(S.sync.url && S.sync.key);
   const budgetOp = () => ({ type: 'budget', income: S.income, bills: S.bills.map(({ name, amount }) => ({ name, amount })) });
@@ -247,7 +248,7 @@ details[open] summary::after { content: "Done"; }
     clearTimeout(syncTimer); syncTimer = setTimeout(flush, 1500);
   }
   async function flush() {
-    if (!syncOn() || syncing || !S.queue.length) return renderSync();
+    if (!syncOn() || syncing) return renderSync();
     syncing = true; renderSync();
     const ops = S.queue.slice(0, 500);
     try {
@@ -255,13 +256,30 @@ details[open] summary::after { content: "Done"; }
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || 'failed');
       const sent = new Set(ops.map(o => o.qid));
-      S.queue = S.queue.filter(o => !sent.has(o.qid)); save();
+      S.queue = S.queue.filter(o => !sent.has(o.qid));
+      if (Array.isArray(j.purchases)) applyServer(j);
+      save();
       syncErr = '';
     } catch (err) {
       syncErr = err.message === 'wrong key' ? 'Wrong key' : "Couldn't reach the sheet, will retry";
     }
-    syncing = false; renderSync();
+    syncing = false; render();
     if (!syncErr && S.queue.length) flush();
+  }
+  // The sheet is the source of truth; changes still waiting to be sent are re-applied on top.
+  function applyServer(j) {
+    let list = j.purchases;
+    for (const op of S.queue) {
+      if (op.type === 'add') list = list.filter(p => p.id !== op.p.id).concat([op.p]);
+      else if (op.type === 'del') list = list.filter(p => p.id !== op.id);
+    }
+    S.purchases = list;
+    const editing = S.queue.some(o => o.type === 'budget') || document.activeElement?.closest('#setupBox');
+    if (!j.hasBudget || editing) return;
+    S.income = j.income;
+    $('#income').value = S.income ? S.income.toFixed(2) : '';
+    const same = S.bills.length === j.bills.length && S.bills.every((b, i) => b.name === j.bills[i].name && b.amount === j.bills[i].amount);
+    if (!same) { S.bills = j.bills.map(b => ({ id: uid(), ...b })); renderBills(); }
   }
   function renderSync() {
     const n = S.queue.length, waiting = n ? ` (${n} change${n === 1 ? '' : 's'} waiting)` : '';
@@ -327,14 +345,15 @@ details[open] summary::after { content: "Done"; }
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
 
-  // Connect (or reconnect) sends everything once; the sheet ignores duplicates.
+  // Connect (or reconnect) sends everything on this device once (the sheet ignores duplicates),
+  // then loads what's in the sheet. An empty budget here never overwrites the sheet's.
   $('#syncUrl').value = S.sync.url; $('#syncKey').value = S.sync.key;
   $('#syncConnect').addEventListener('click', () => {
     const url = $('#syncUrl').value.trim(), key = $('#syncKey').value.trim();
     if (url && !/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) { $('#syncStatus').textContent = 'That is not a Google Apps Script URL'; return; }
     S.sync = { url, key }; S.queue = []; syncErr = ''; save();
     S.purchases.forEach(p => queue({ type: 'add', p }));
-    queue(budgetOp());
+    if (S.income > 0 || S.bills.length) queue(budgetOp());
     clearTimeout(syncTimer); flush();
   });
   window.addEventListener('online', flush);
