@@ -169,28 +169,31 @@ function periodOf(ds, payday) {
 }
 
 // ---------- archive ----------
-// Saves every finished period that has data and hasn't been saved yet. Runs on each sync (cheap
-// when there's nothing to do). A failure never breaks syncing; it's retried on the next sync.
+// Saves every finished period with data that hasn't been saved yet. It remembers the last day it
+// saved, so nothing is saved twice, even if the payday changes (the first period after a change
+// then only covers the days not saved yet). Runs on each sync (cheap when there's nothing to do).
+// A failure never breaks syncing; it's retried on the next sync.
 function archiveSafe(ss) {
   try { archive(ss); } catch (err) { console.error('archive failed: ' + err); }
 }
 function archive(ss) {
   const props = PropertiesService.getScriptProperties();
-  const done = JSON.parse(props.getProperty('archived') || '[]');
   const d = sheetData(ss);
   const current = periodOf(d.today, d.payday).from;
+  let through = props.getProperty('archivedThrough') || '';  // last day already saved ('' = none yet)
   const todo = new Set();
   for (const r of d.pRows.concat(d.iRows)) {
-    const from = periodOf(r[1], d.payday).from;
-    if (from < current && !done.includes(from)) todo.add(from);
+    if (r[1] > through && r[1] < current) todo.add(periodOf(r[1], d.payday).from);
   }
   for (const from of [...todo].sort()) {
     const p = periodOf(from, d.payday);
-    savePeriod(d, p, `Weekly ${p.from} – ${p.to}`);
-    done.push(from);
-    props.setProperty('archived', JSON.stringify(done));
+    const start = through >= p.from ? nextDay(through) : p.from;
+    savePeriod(d, { from: start, to: p.to }, `Weekly ${start} – ${p.to}`);
+    through = p.to;
+    props.setProperty('archivedThrough', through);
   }
 }
+function nextDay(ds) { return new Date(Date.parse(ds) + 864e5).toISOString().slice(0, 10); }
 // Run this once from the Apps Script editor (pick testArchive next to "Debug", then Run) to grant the
 // Drive permission and check that archiving works. It saves the current period as a TEST copy in the
 // "Weekly archive" folder; you can delete that copy afterwards.
