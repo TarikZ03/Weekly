@@ -54,6 +54,9 @@ main { max-width: 30rem; margin: 0 auto; display: flex; flex-direction: column; 
 .wk b { font-weight: 600; font-size: 15px; }
 .wk.past { opacity: .45; }
 .wk.now { border-color: var(--text); }
+.carry { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 14px; display: flex; flex-direction: column; gap: 10px; }
+.carry .row { justify-content: flex-end; gap: 16px; }
+.carry .add { margin-left: 0; padding: 8px 14px; }
 .month { text-align: center; color: var(--muted); font-size: 14px; margin-top: -12px; }
 
 form { display: flex; flex-direction: column; gap: 8px; }
@@ -85,13 +88,16 @@ details { border-top: 1px solid var(--line); padding-top: 14px; }
 summary { cursor: pointer; color: var(--muted); font-size: 14px; list-style: none; display: flex; justify-content: space-between; }
 summary::-webkit-details-marker { display: none; }
 summary::after { content: "Edit"; color: var(--text); font-weight: 600; }
-details[open] summary::after { content: "Done"; }
+#setupBox[open] > summary::after { content: "Done"; }
 .setup { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .setup label { font-size: 13px; color: var(--muted); margin-top: 6px; }
 .link { color: var(--green); font-weight: 600; font-size: 14px; align-self: flex-start; padding: 4px 0; }
-#avgBox summary, #invBox summary { color: var(--text); font-weight: 600; }
-#avgBox summary::after, #invBox summary::after { content: "Show"; }
-#avgBox[open] summary::after, #invBox[open] summary::after { content: "Hide"; }
+.fold > summary { color: var(--text); font-weight: 600; }
+.fold > summary::after { content: "Show"; }
+.fold[open] > summary::after { content: "Hide"; }
+.fold.inner { border-top: 0; padding-top: 2px; }
+.fold.inner > summary { color: var(--muted); font-weight: 500; }
+.fold.inner > .list { margin-top: 6px; }
 .seg { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; background: var(--soft); border-radius: 8px; padding: 3px; }
 .seg button { padding: 7px 4px; border-radius: 6px; font-size: 14px; color: var(--muted); }
 .seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
@@ -110,6 +116,14 @@ details[open] summary::after { content: "Done"; }
   <div class="top">
     <div><span id="monthName"></span><br><span id="spent"></span></div>
     <div><span id="weekName"></span><br><span id="weekDates"></span></div>
+  </div>
+
+  <div class="carry" id="carryAsk" hidden>
+    <div id="carryText"></div>
+    <div class="row">
+      <button class="link" type="button" data-carry="no" id="carryNo"></button>
+      <button class="add" type="button" data-carry="yes" id="carryYes"></button>
+    </div>
   </div>
 
   <div class="hero">
@@ -135,12 +149,23 @@ details[open] summary::after { content: "Done"; }
     <div class="hint" id="hint"></div>
   </form>
 
-  <section>
-    <div class="head"><h2>This period</h2><button class="link" type="button" id="export">Export CSV</button></div>
-    <ul class="list" id="purchases"></ul>
-  </section>
+  <details id="spendBox" class="fold">
+    <summary><span>Spending</span></summary>
+    <div class="setup">
+      <div class="seg" id="spendRange">
+        <button type="button" data-r="week">This week</button>
+        <button type="button" data-r="period">This period</button>
+      </div>
+      <ul class="list" id="spendCats"></ul>
+      <details id="purchBox" class="fold inner">
+        <summary><span id="purchSum">Purchases</span></summary>
+        <ul class="list" id="purchases"></ul>
+      </details>
+      <button class="link" type="button" id="export">Export CSV</button>
+    </div>
+  </details>
 
-  <details id="avgBox">
+  <details id="avgBox" class="fold">
     <summary><span>Averages</span></summary>
     <div class="setup">
       <select id="avgRange" aria-label="Period">
@@ -154,12 +179,16 @@ details[open] summary::after { content: "Done"; }
       <div class="row" id="avgCustom" hidden>
         <input type="date" id="avgFrom" aria-label="From"><input type="date" id="avgTo" aria-label="To">
       </div>
+      <div class="seg" id="avgUnit">
+        <button type="button" data-unit="week">Per week</button>
+        <button type="button" data-unit="month">Per month</button>
+      </div>
       <div class="hint" id="avgNote"></div>
       <ul class="list" id="avgList"></ul>
     </div>
   </details>
 
-  <details id="invBox">
+  <details id="invBox" class="fold">
     <summary><span>Investments</span></summary>
     <div class="setup">
       <div class="seg" id="invKind">
@@ -208,11 +237,13 @@ details[open] summary::after { content: "Done"; }
   const S = {
     income: Number(raw.income) || 0,
     payday: Number(raw.payday) || 1,         // the budget period runs from payday to the day before the next one
+    carry: raw.carry && typeof raw.carry === 'object' ? raw.carry : {},  // week start date → 'yes'/'no': add last week's leftover (or minus) to this week
     bills: Array.isArray(raw.bills) ? raw.bills : [],
     purchases: (Array.isArray(raw.purchases) ? raw.purchases : []).map(p => ({ ...p, cat: OLD_CATS[p.cat] || p.cat || 'Other' })),
     sync: raw.sync || { url: '', key: '' },   // Google Sheet sync settings, only ever stored on this device
     queue: Array.isArray(raw.queue) ? raw.queue : [],  // changes not yet sent to the sheet
     avg: raw.avg || { range: '4', from: '', to: '' },  // chosen Averages range (this device only)
+    spendRange: raw.spendRange === 'period' ? 'period' : 'week',  // Spending section: this week or this period
     inv: Array.isArray(raw.inv) ? raw.inv : [],  // investment entries: buy / sell
   };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
@@ -252,22 +283,37 @@ details[open] summary::after { content: "Done"; }
 
   // Weekly allowance = (income - recurring) / 4.
   // A normal purchase comes out of its own week. A spread purchase is split evenly
-  // over its own week and every week left after it.
+  // over its own week and every week left after it. What was left (or overspent) in the previous
+  // week is added to a week if you chose so; week 1 looks at week 4 of the previous period.
+  // Weeks that ended before your first purchase ever don't carry anything.
   function compute() {
     const p = periodOf(today());
     const fixed = S.bills.reduce((a, b) => a + monthly(b), 0);
     const free = S.income - fixed;
-    const weeks = [0, 1, 2, 3].map(i => ({ start: addDays(p.start, i * 7), end: i === 3 ? p.end : addDays(p.start, i * 7 + 6), allow: free / 4, spent: 0 }));
+    const first = S.purchases.reduce((a, x) => !a || x.date < a ? x.date : a, '');
+    const weeks = weeksOf(p, free, first, {});
     const list = S.purchases.filter(x => x.date && x.date >= p.from && x.date <= p.to);
-    let total = 0;
-    for (const x of list) {
+    const total = list.reduce((a, x) => a + x.amount, 0);
+    return { p, fixed, free, weeks, list, total, cur: weekIn(p, iso(today())) };
+  }
+  function weeksOf(p, free, first, memo) {
+    if (memo[p.from]) return memo[p.from];
+    const weeks = [0, 1, 2, 3].map(i => ({ start: addDays(p.start, i * 7), end: i === 3 ? p.end : addDays(p.start, i * 7 + 6), allow: free / 4, spent: 0 }));
+    for (const x of S.purchases) {
+      if (!x.date || x.date < p.from || x.date > p.to) continue;
       const k = weekIn(p, x.date);
-      total += x.amount;
       if (x.spread) { const share = x.amount / (4 - k); for (let j = k; j < 4; j++) weeks[j].allow -= share; }
       else weeks[k].spent += x.amount;
     }
-    weeks.forEach(w => w.left = w.allow - w.spent);
-    return { p, fixed, free, weeks, list, total, cur: weekIn(p, iso(today())) };
+    weeks.forEach((w, i) => {
+      let prev = weeks[i - 1];
+      if (!i && first && iso(addDays(p.start, -1)) >= first) prev = weeksOf(periodOf(addDays(p.start, -1)), free, first, memo)[3];
+      w.prev = prev && first && iso(prev.end) >= first ? prev : null;
+      w.carried = w.prev && S.carry[iso(w.start)] === 'yes' ? w.prev.left : 0;
+      w.allow += w.carried;
+      w.left = w.allow - w.spent;
+    });
+    return memo[p.from] = weeks;
   }
 
   function render() {
@@ -279,20 +325,24 @@ details[open] summary::after { content: "Done"; }
 
     $('#left').textContent = m(w.left);
     $('#left').classList.toggle('red', w.left < -0.004);
-    $('#leftSub').textContent = S.income > 0 ? `left this week · of ${m(w.allow)}` : 'Set your income and expenses below';
+    $('#leftSub').textContent = S.income > 0 ? `left this week · of ${m(w.allow)}${w.carried ? ` (incl. ${w.carried > 0 ? '+' : ''}${m(w.carried)} from last week)` : ''}` : 'Set your income and expenses below';
+    const ask = w.prev && Math.abs(w.prev.left) > 0.004 && !(iso(w.start) in S.carry);
+    $('#carryAsk').hidden = !ask;
+    if (ask) {
+      const over = w.prev.left < 0;
+      $('#carryText').textContent = over ? `Last week ended ${m(-w.prev.left)} over. Take it off this week's allowance?`
+        : `Last week you had ${m(w.prev.left)} left. Add it to this week's allowance?`;
+      $('#carryYes').textContent = over ? 'Take it off' : 'Add it';
+      $('#carryNo').textContent = 'Forget it';
+    }
 
     $('#weeks').innerHTML = r.weeks.map((x, i) =>
       `<div class="wk${i < r.cur ? ' past' : ''}${i === r.cur ? ' now' : ''}"><small>W${i + 1}</small><b class="num${x.left < -0.4 ? ' red' : ''}">${m0(x.left)}</b></div>`).join('');
 
-    const ml = r.free - r.total;
+    const ml = r.free - r.total + r.weeks[0].carried;
     $('#monthLeft').innerHTML = `<span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left until ${md(r.p.next)}`;
 
-    const items = [...r.list].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
-    $('#purchases').innerHTML = items.length ? items.map(p => {
-      const n = 4 - weekIn(r.p, p.date);
-      return `<li><div class="mid"><div>${esc(p.note || p.cat)}</div><small>${esc(p.cat)} · ${md(day(p.date))}${p.spread && n > 1 ? ` · spread over ${n} wks` : ''}</small></div>
-        <span class="num">${m(p.amount)}</span><button class="x" type="button" data-del="${p.id}" aria-label="Delete">×</button></li>`;
-    }).join('') : '<li class="empty">Nothing yet this period.</li>';
+    renderSpending(r);
 
     renderCats();
 
@@ -303,8 +353,32 @@ details[open] summary::after { content: "Done"; }
     renderSync();
   }
 
+  // Spending this week or this period: a total per category (largest first), with the individual
+  // purchases folded away underneath. Spread purchases count in full on the day they were bought.
+  function renderSpending(r) {
+    const wk = S.spendRange === 'week', w = r.weeks[r.cur];
+    const from = wk ? iso(w.start) : r.p.from, to = wk ? iso(w.end) : r.p.to;
+    const items = r.list.filter(p => p.date >= from && p.date <= to).sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
+    document.querySelectorAll('#spendRange button').forEach(b => b.classList.toggle('on', b.dataset.r === S.spendRange));
+    const by = {};
+    for (const p of items) by[p.cat] = (by[p.cat] || 0) + p.amount;
+    const rows = Object.entries(by).sort((a, b) => b[1] - a[1]), total = items.reduce((a, p) => a + p.amount, 0);
+    $('#spendCats').innerHTML = rows.length ? rows.map(([c, x]) => `<li><div class="mid"><div>${esc(c)}</div><div class="bar"><i style="width:${x / rows[0][1] * 100}%"></i></div></div>
+        <div class="end num">${m(x)}</div></li>`).join('') +
+      `<li class="total"><div class="mid"><div>Total</div></div><div class="end num">${m(total)}</div></li>`
+      : `<li class="empty">Nothing spent yet ${wk ? 'this week' : 'this period'}.</li>`;
+    $('#purchSum').textContent = `Purchases (${items.length})`;
+    $('#purchBox').hidden = !items.length;
+    $('#purchases').innerHTML = items.map(p => {
+      const n = 4 - weekIn(r.p, p.date);
+      return `<li><div class="mid"><div>${esc(p.note || p.cat)}</div><small>${esc(p.cat)} · ${md(day(p.date))}${p.spread && n > 1 ? ` · spread over ${n} wks` : ''}</small></div>
+        <span class="num">${m(p.amount)}</span><button class="x" type="button" data-del="${p.id}" aria-label="Delete">×</button></li>`;
+    }).join('');
+  }
+
   // Average spending per category over a chosen range. Spread purchases count in full on their date.
-  // The range never starts before your first purchase, so a new app doesn't drag the average down.
+  // The range never starts before your first purchase, so a new app doesn't drag the average down,
+  // and less than a week (or month) of data is never stretched out: it just shows what was spent.
   function renderAvg() {
     const v = S.avg.range, t0 = today();
     $('#avgCustom').hidden = v !== 'custom';
@@ -319,12 +393,14 @@ details[open] summary::after { content: "Done"; }
     const by = {};
     let total = 0;
     for (const p of S.purchases) if (p.date >= f && p.date <= t) { by[p.cat] = (by[p.cat] || 0) + p.amount; total += p.amount; }
-    const perWeek = x => x / days * 7, perMonth = x => x / days * 365.25 / 12;
+    const unit = S.avg.unit === 'month' ? 365.25 / 12 : 7;
+    const avg = x => x / Math.max(days, unit) * unit;
+    document.querySelectorAll('#avgUnit button').forEach(b => b.classList.toggle('on', b.dataset.unit === (unit === 7 ? 'week' : 'month')));
     const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
-    $('#avgNote').textContent = `${md(from)} – ${md(to)} · ${days} day${days === 1 ? '' : 's'}${clipped ? ' (since your first purchase)' : ''}`;
+    $('#avgNote').textContent = `Average spent per ${unit === 7 ? 'week' : 'month'} · ${md(from)} – ${md(to)}${clipped ? ' (since your first purchase)' : ''}`;
     $('#avgList').innerHTML = rows.length ? rows.map(([c, x]) => `<li><div class="mid"><div>${esc(c)}</div><div class="bar"><i style="width:${x / rows[0][1] * 100}%"></i></div></div>
-        <div class="end num">${m(perWeek(x))}/wk<small>${m(perMonth(x))}/mo</small></div></li>`).join('') +
-      `<li class="total"><div class="mid"><div>Total</div></div><div class="end num">${m(perWeek(total))}/wk<small>${m(perMonth(total))}/mo</small></div></li>`
+        <div class="end num">${m(avg(x))}</div></li>`).join('') +
+      `<li class="total"><div class="mid"><div>Total</div></div><div class="end num">${m(avg(total))}</div></li>`
       : '<li class="empty">No purchases in this range.</li>';
   }
 
@@ -362,11 +438,12 @@ details[open] summary::after { content: "Done"; }
       ? (invKind === 'buy' ? `You put in ${m(sh * pr + fe)}` : `You get ${m(sh * pr - fe)}`) : '';
   }
 
-  // Category dropdown: the defaults, anything used before, Other, and a way to add a new one.
+  // Category dropdown (A–Z): the defaults, anything used before, then Other and a way to add a new one.
   // Only rebuilt when the list changes, so an open picker isn't disturbed by a background sync.
   let newCats = [], catsShown = '';
   function renderCats() {
-    const cats = [...new Set([...DEFAULT_CATS, ...S.purchases.map(p => p.cat), ...newCats])].filter(c => c !== 'Other').concat('Other');
+    const cats = [...new Set([...DEFAULT_CATS, ...S.purchases.map(p => p.cat), ...newCats])].filter(c => c !== 'Other')
+      .sort((a, b) => a.localeCompare(b)).concat('Other');
     const sel = $('#bCat'), key = cats.join('\n');
     if (key !== catsShown) {
       const keep = sel.value;
@@ -402,7 +479,7 @@ details[open] summary::after { content: "Done"; }
   // Each sync gets the whole sheet back, so all devices show the same data.
   let syncing = false, syncTimer, syncErr = '';
   const syncOn = () => !!(S.sync.url && S.sync.key);
-  const budgetOp = () => ({ type: 'budget', income: S.income, payday: S.payday, bills: S.bills.map(({ name, amount, freq }) => ({ name, amount, freq: freq || 'monthly' })) });
+  const budgetOp = () => ({ type: 'budget', income: S.income, payday: S.payday, carry: S.carry, bills: S.bills.map(({ name, amount, freq }) => ({ name, amount, freq: freq || 'monthly' })) });
   function queue(op) {
     if (!syncOn()) return;
     if (op.type === 'budget') S.queue = S.queue.filter(o => o.type !== 'budget');  // only the latest budget matters
@@ -454,6 +531,7 @@ details[open] summary::after { content: "Done"; }
     S.income = j.income;
     $('#income').value = S.income ? S.income.toFixed(2) : '';
     if (j.payday) { S.payday = j.payday; $('#payday').value = S.payday; }
+    if (j.carry) S.carry = j.carry;
     const same = S.bills.length === j.bills.length && S.bills.every((b, i) => b.name === j.bills[i].name && b.amount === j.bills[i].amount && (b.freq || 'monthly') === j.bills[i].freq);
     if (!same) { S.bills = j.bills.map(b => ({ id: uid(), ...b })); renderBills(); }
   }
@@ -487,6 +565,17 @@ details[open] summary::after { content: "Done"; }
   });
   $('#bSpread').addEventListener('change', hint);
 
+  $('#carryAsk').addEventListener('click', e => {
+    const v = e.target.dataset?.carry;
+    if (!v) return;
+    const r = compute();
+    S.carry = { ...S.carry, [iso(r.weeks[r.cur].start)]: v };
+    save(); queue(budgetOp()); render();
+  });
+  $('#spendRange').addEventListener('click', e => {
+    const v = e.target.dataset?.r;
+    if (v) { S.spendRange = v; save(); render(); }
+  });
   $('#purchases').addEventListener('click', e => {
     const id = e.target.dataset?.del;
     if (!id) return;
@@ -527,7 +616,11 @@ details[open] summary::after { content: "Done"; }
   });
 
   $('#avgRange').value = S.avg.range; $('#avgFrom').value = S.avg.from; $('#avgTo').value = S.avg.to;
-  const editAvg = () => { S.avg = { range: $('#avgRange').value, from: $('#avgFrom').value, to: $('#avgTo').value }; save(); renderAvg(); };
+  const editAvg = () => { S.avg = { ...S.avg, range: $('#avgRange').value, from: $('#avgFrom').value, to: $('#avgTo').value }; save(); renderAvg(); };
+  $('#avgUnit').addEventListener('click', e => {
+    const u = e.target.dataset?.unit;
+    if (u) { S.avg = { ...S.avg, unit: u }; save(); renderAvg(); }
+  });
   ['#avgRange', '#avgFrom', '#avgTo'].forEach(id => $(id).addEventListener('change', editAvg));
 
   const editBill = e => {

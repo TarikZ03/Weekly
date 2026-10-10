@@ -62,10 +62,13 @@ function doPost(e) {
       if (budget) {
         const inc = Number(budget.income) || 0;
         const payday = Math.min(31, Math.max(1, Number(budget.payday) || 1));
+        // carry rows: week start date → 1 if last week's minus was taken off that week, 0 if not
+        const carry = Object.entries(budget.carry || {}).filter(([k]) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()
+          .map(([k, v]) => ['carry', k, v === 'yes' ? 1 : 0, '', '']);
         write(B, [['income', 'Monthly income', inc, 'monthly', inc], ['setting', 'Payday', payday, '', '']].concat((budget.bills || []).map(b => {
           const freq = PER_MONTH[b.freq] ? b.freq : 'monthly';
           return ['expense', text(b.name), Number(b.amount) || 0, freq, perMonth(b.amount, freq)];
-        })), B_HEAD.length);
+        }), carry), B_HEAD.length);
       }
     }
 
@@ -83,7 +86,7 @@ function doPost(e) {
       value: r[2] === 'value' ? Number(r[6]) || 0 : 0, t: String(r[7]),
     }));
     archiveSafe(ss);
-    return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, payday: paydayOf(bRows), bills, inv });
+    return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, payday: paydayOf(bRows), carry: carryOf(bRows, tz), bills, inv });
   } finally {
     lock.releaseLock();
   }
@@ -104,36 +107,56 @@ function doGet(e) {
 
 // Same rules as the app: the period runs from payday to the day before the next payday, split into
 // 4 weeks (the last one takes the extra days); (income - expenses per month) / 4 per week;
-// a spread purchase is split evenly over its own week and the weeks after it.
+// a spread purchase is split evenly over its own week and the weeks after it; and what was left
+// (or overspent) in the previous week is added to a week if that was chosen in the app.
 function summary() {
   const ss = SpreadsheetApp.getActive(), tz = ss.getSpreadsheetTimeZone();
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const bRows = read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length), payday = paydayOf(bRows);
-
   const { start, from, to, next } = periodOf(today, payday);
-  const weekOf = ds => Math.min(3, Math.floor((Date.parse(ds) - start) / 6048e5));
 
   let income = 0, fixed = 0;
   for (const [type, , amount, freq] of bRows) {
     if (type === 'income') income = Number(amount) || 0;
     else if (type === 'expense') fixed += perMonth(amount, freq);
   }
-  const free = income - fixed, allow = [1, 2, 3, 4].map(() => free / 4), spent = [0, 0, 0, 0];
+  const rows = read(sheet(ss, PURCHASES, P_HEAD), P_HEAD.length)
+    .map(r => ({ date: day(r[1], tz), cat: String(r[3]), amount: Number(r[4]) || 0, spread: r[5] === 'yes' }));
+  const ctx = { payday, free: income - fixed, carry: carryOf(bRows, tz), rows, first: rows.reduce((a, r) => !a || r.date < a ? r.date : a, '') };
+  const weeks = periodWeeks(from, ctx, {});
+
   let total = 0;
   const cats = {};
-  for (const r of read(sheet(ss, PURCHASES, P_HEAD), P_HEAD.length)) {
-    const ds = day(r[1], tz);
-    if (ds < from || ds > to) continue;
-    const k = weekOf(ds), amt = Number(r[4]) || 0;
-    total += amt;
-    cats[r[3]] = (cats[r[3]] || 0) + amt;
-    if (r[5] === 'yes') for (let j = k; j < 4; j++) allow[j] -= amt / (4 - k);
-    else spent[k] += amt;
+  for (const r of rows) if (r.date >= from && r.date <= to) { total += r.amount; cats[r.cat] = (cats[r.cat] || 0) + r.amount; }
+  const cur = Math.min(3, Math.floor((Date.parse(today) - start) / 6048e5)), round = n => Math.round(n * 100) / 100;
+  return { ok: true, date: today, week: cur + 1, weekLeft: round(weeks[cur].left), weekAllowance: round(weeks[cur].allow),
+    monthLeft: round(ctx.free - total + weeks[0].carried), nextPayday: next,
+    from, to, spent: round(total), weeks: weeks.map(w => round(w.left)),
+    categories: Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([name, amount]) => ({ name, amount: round(amount) })) };
+}
+
+// The 4 weeks of the period starting on `from`, same rules as the app. Week 1 can take over what
+// was left in week 4 of the previous period, so this looks back as far as needed (memoised).
+// Weeks that ended before the first purchase ever don't carry anything.
+function periodWeeks(from, ctx, memo) {
+  if (memo[from]) return memo[from];
+  const p = periodOf(from, ctx.payday), d = n => new Date(p.start.getTime() + n * 864e5).toISOString().slice(0, 10);
+  const weeks = [0, 1, 2, 3].map(k => ({ start: d(k * 7), end: k === 3 ? p.to : d(k * 7 + 6), allow: ctx.free / 4, spent: 0 }));
+  for (const r of ctx.rows) {
+    if (r.date < p.from || r.date > p.to) continue;
+    const k = Math.min(3, Math.floor((Date.parse(r.date) - p.start) / 6048e5));
+    if (r.spread) for (let j = k; j < 4; j++) weeks[j].allow -= r.amount / (4 - k);
+    else weeks[k].spent += r.amount;
   }
-  const cur = weekOf(today), round = n => Math.round(n * 100) / 100;
-  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total), nextPayday: next,
-    from, to, spent: round(total), weeks: allow.map((a, i) => round(a - spent[i])),
-    categories: Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([name, amount]) => ({ name: String(name), amount: round(amount) })) };
+  weeks.forEach((w, k) => {
+    let prev = weeks[k - 1];
+    if (!k && ctx.first && d(-1) >= ctx.first) prev = periodWeeks(periodOf(d(-1), ctx.payday).from, ctx, memo)[3];
+    const eligible = prev && ctx.first && prev.end >= ctx.first;
+    w.carried = eligible && ctx.carry[w.start] === 'yes' ? prev.left : 0;
+    w.allow += w.carried;
+    w.left = w.allow - w.spent;
+  });
+  return memo[from] = weeks;
 }
 
 // Applies add/delete ops (matched by id) to a sheet whose first column is the id.
@@ -251,6 +274,12 @@ function api(method, url, body) {
   });
   if (res.getResponseCode() >= 300) throw new Error(`${method} ${url} → ${res.getResponseCode()}: ${res.getContentText().slice(0, 300)}`);
   return JSON.parse(res.getContentText() || '{}');
+}
+
+function carryOf(bRows, tz) {
+  const c = {};
+  for (const r of bRows) if (r[0] === 'carry') c[day(r[1], tz)] = Number(r[2]) ? 'yes' : 'no';
+  return c;
 }
 
 function paydayOf(bRows) {
