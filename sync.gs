@@ -84,7 +84,7 @@ function doPost(e) {
   }
 }
 
-// Totals only, for a widget: GET <url>?key=...
+// Totals only (this period), for the home-screen widget: GET <url>?key=...
 function doGet(e) {
   if (KEY === 'CHANGE-ME' || e.parameter.key !== KEY) return out({ ok: false, error: 'wrong key' });
   return out(summary());
@@ -114,16 +114,20 @@ function summary() {
   }
   const free = income - fixed, allow = [1, 2, 3, 4].map(() => free / 4), spent = [0, 0, 0, 0];
   let total = 0;
+  const cats = {};
   for (const r of read(sheet(ss, PURCHASES, P_HEAD), P_HEAD.length)) {
     const ds = day(r[1], tz);
     if (ds < from || ds > to) continue;
     const k = weekOf(ds), amt = Number(r[4]) || 0;
     total += amt;
+    cats[r[3]] = (cats[r[3]] || 0) + amt;
     if (r[5] === 'yes') for (let j = k; j < 4; j++) allow[j] -= amt / (4 - k);
     else spent[k] += amt;
   }
   const cur = weekOf(today), round = n => Math.round(n * 100) / 100;
-  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total), nextPayday: str(next) };
+  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total), nextPayday: str(next),
+    from, to, spent: round(total), weeks: allow.map((a, i) => round(a - spent[i])),
+    categories: Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([name, amount]) => ({ name: String(name), amount: round(amount) })) };
 }
 
 // Applies add/delete ops (matched by id) to a sheet whose first column is the id.

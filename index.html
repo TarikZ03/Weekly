@@ -197,6 +197,7 @@ details[open] summary::after { content: "Done"; }
       <input id="syncUrl" placeholder="Script URL: https://script.google.com/…" autocomplete="off" autocapitalize="off" spellcheck="false">
       <input id="syncKey" type="password" placeholder="Key" autocomplete="off">
       <div class="row"><button class="link" type="button" id="syncConnect">Connect</button><span class="hint" id="syncStatus"></span></div>
+      <div class="row"><button class="link" type="button" id="copyWidget">Copy widget script</button><span class="hint" id="widgetStatus">for the Scriptable app</span></div>
     </div>
   </details>
 </main>
@@ -569,6 +570,20 @@ details[open] summary::after { content: "Done"; }
     clearTimeout(syncTimer); flush();
   });
   window.addEventListener('online', flush);
+
+  // widget.js with this device's URL and key filled in, ready to paste into Scriptable.
+  // The ClipboardItem-with-a-promise form keeps Safari's "user tapped" permission across the fetch.
+  $('#copyWidget').addEventListener('click', () => {
+    const say = t => $('#widgetStatus').textContent = t;
+    if (!syncOn()) return say('Connect the sheet first');
+    const text = fetch('widget.js', { cache: 'no-cache' }).then(r => { if (!r.ok) throw 0; return r.text(); })
+      .then(t => t.replace('__URL__', S.sync.url).replace('__KEY__', S.sync.key));
+    const plain = () => text.then(t => navigator.clipboard.writeText(t));
+    const copy = window.ClipboardItem && navigator.clipboard?.write
+      ? navigator.clipboard.write([new ClipboardItem({ 'text/plain': text.then(t => new Blob([t], { type: 'text/plain' })) })]).catch(plain)
+      : plain();
+    copy.then(() => say('Copied ✓ now paste it into Scriptable'), () => say("Couldn't copy, try again"));
+  });
 
   // refresh when reopened on a new day / week / month
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); flush(); } });

@@ -42,3 +42,14 @@ so keep those two private.
 Keep the URL and key private. To cut off access: Deploy → Manage deployments → Archive, then make a
 new deployment (new URL) and reconnect. If you edit the script: Manage deployments → Edit → Version: New.
 Download the data as CSV any time from the sheet: File → Download → CSV.
+
+## Home-screen widget (optional, needs the sheet sync)
+1. Install **Scriptable** (free) from the App Store.
+2. In the Weekly app: Edit → **Copy widget script** (it fills in your URL and key).
+3. In Scriptable: tap **+**, paste, tap the title at the top to name it `Weekly`, then **Done**.
+   Tap the script once to preview it.
+4. Long-press the home screen → **Edit** → **Add Widget** → Scriptable → choose the **Large** size → Add Widget.
+5. Long-press the new widget → **Edit Widget** → Script: **Weekly**.
+
+It shows this pay period's totals and refreshes about every 15 minutes (iOS decides exactly when).
+The copied script contains your URL and key, so don't share it. `widget.js` in this repo has placeholders only.
