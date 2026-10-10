@@ -23,6 +23,7 @@
   :root { --bg: #111214; --card: #1B1D21; --line: #2A2D33; --text: #ECEDEF; --muted: #8E939C; --green: #4CC38A; --red: #F0698A; --soft: #24272C; }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { font: 16px/1.4 -apple-system, system-ui, "Segoe UI", sans-serif;
   padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(32px + env(safe-area-inset-bottom, 0px)); }
@@ -84,6 +85,15 @@ details[open] summary::after { content: "Done"; }
 .setup { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .setup label { font-size: 13px; color: var(--muted); margin-top: 6px; }
 .link { color: var(--green); font-weight: 600; font-size: 14px; align-self: flex-start; padding: 4px 0; }
+#avgBox summary { color: var(--text); font-weight: 600; }
+#avgBox summary::after { content: "Show"; }
+#avgBox[open] summary::after { content: "Hide"; }
+#avgBox select { width: 100%; }
+.list .end { text-align: right; flex: 0 0 auto; }
+.list .end small { display: block; color: var(--muted); font-size: 13px; }
+.bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--green); border-radius: 2px; }
+.list li.total { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -115,15 +125,36 @@ details[open] summary::after { content: "Done"; }
   </form>
 
   <section>
-    <div class="head"><h2>This month</h2><button class="link" type="button" id="export">Export CSV</button></div>
+    <div class="head"><h2>This period</h2><button class="link" type="button" id="export">Export CSV</button></div>
     <ul class="list" id="purchases"></ul>
   </section>
+
+  <details id="avgBox">
+    <summary><span>Averages</span></summary>
+    <div class="setup">
+      <select id="avgRange" aria-label="Period">
+        <option value="4">Last 4 weeks</option>
+        <option value="8">Last 8 weeks</option>
+        <option value="13">Last 3 months</option>
+        <option value="26">Last 6 months</option>
+        <option value="52">Last 12 months</option>
+        <option value="custom">Custom dates</option>
+      </select>
+      <div class="row" id="avgCustom" hidden>
+        <input type="date" id="avgFrom" aria-label="From"><input type="date" id="avgTo" aria-label="To">
+      </div>
+      <div class="hint" id="avgNote"></div>
+      <ul class="list" id="avgList"></ul>
+    </div>
+  </details>
 
   <details id="setupBox">
     <summary><span><span id="setupSum"></span><span id="syncNote" class="red"></span></span></summary>
     <div class="setup">
       <label for="income">Monthly income (after tax)</label>
       <input id="income" class="num" inputmode="decimal" placeholder="€0.00">
+      <label for="payday">Payday (day of the month you get paid)</label>
+      <input id="payday" class="num" inputmode="numeric" placeholder="1">
       <label>Recurring expenses</label>
       <div id="bills" class="setup" style="margin:0"></div>
       <button class="link" type="button" id="addBill">+ Add expense</button>
@@ -144,10 +175,12 @@ details[open] summary::after { content: "Done"; }
   const OLD_CATS = { groceries: 'Groceries', fun: 'Fun' };
   const S = {
     income: Number(raw.income) || 0,
+    payday: Number(raw.payday) || 1,         // the budget period runs from payday to the day before the next one
     bills: Array.isArray(raw.bills) ? raw.bills : [],
     purchases: (Array.isArray(raw.purchases) ? raw.purchases : []).map(p => ({ ...p, cat: OLD_CATS[p.cat] || p.cat || 'Other' })),
     sync: raw.sync || { url: '', key: '' },   // Google Sheet sync settings, only ever stored on this device
     queue: Array.isArray(raw.queue) ? raw.queue : [],  // changes not yet sent to the sheet
+    avg: raw.avg || { range: '4', from: '', to: '' },  // chosen Averages range (this device only)
   };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 
@@ -164,38 +197,49 @@ details[open] summary::after { content: "Done"; }
   // Recurring expenses are counted per month: €120 yearly = €10 a month.
   const PER_MONTH = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12 };
   const monthly = b => (b.amount || 0) * (PER_MONTH[b.freq] || 1);
-  const DEFAULT_CATS = ['Groceries', 'Eating out', 'Transport', 'Shopping', 'Fun'];
+  const DEFAULT_CATS = ['Groceries', 'Eating out', 'Transport', 'Shopping', 'Grooming', 'Fun'];
 
-  // The month is split into 4 weeks: days 1-7, 8-14, 15-21, 22-end.
-  const weekOf = ds => Math.min(3, Math.floor((Number(ds.slice(8, 10)) - 1) / 7));
+  const day = ds => new Date(+ds.slice(0, 4), +ds.slice(5, 7) - 1, +ds.slice(8, 10));
+  const today = () => day(iso(new Date()));
+  const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  const daysBetween = (a, b) => Math.round((b - a) / 864e5);
+  const md = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  // A period runs from payday to the day before the next payday (payday 1 = calendar month;
+  // payday 31 in a 30-day month = the 30th). It's split into 4 weeks; the last one takes the extra days.
+  function periodOf(d) {
+    const startIn = (y, mo) => new Date(y, mo, Math.min(S.payday, new Date(y, mo + 1, 0).getDate()));
+    let start = startIn(d.getFullYear(), d.getMonth());
+    if (d < start) start = startIn(d.getFullYear(), d.getMonth() - 1);
+    const next = startIn(start.getFullYear(), start.getMonth() + 1);
+    return { start, next, end: addDays(next, -1), from: iso(start), to: iso(addDays(next, -1)) };
+  }
+  const weekIn = (p, ds) => Math.min(3, Math.floor(daysBetween(p.start, day(ds)) / 7));
 
   // Weekly allowance = (income - recurring) / 4.
   // A normal purchase comes out of its own week. A spread purchase is split evenly
   // over its own week and every week left after it.
   function compute() {
-    const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
-    const key = `${y}-${pad(mo + 1)}`, dim = new Date(y, mo + 1, 0).getDate();
+    const p = periodOf(today());
     const fixed = S.bills.reduce((a, b) => a + monthly(b), 0);
     const free = S.income - fixed;
-    const weeks = [0, 1, 2, 3].map(i => ({ from: i * 7 + 1, to: i === 3 ? dim : i * 7 + 7, allow: free / 4, spent: 0 }));
-    const list = S.purchases.filter(p => p.date && p.date.startsWith(key));
+    const weeks = [0, 1, 2, 3].map(i => ({ start: addDays(p.start, i * 7), end: i === 3 ? p.end : addDays(p.start, i * 7 + 6), allow: free / 4, spent: 0 }));
+    const list = S.purchases.filter(x => x.date && x.date >= p.from && x.date <= p.to);
     let total = 0;
-    for (const p of list) {
-      const k = weekOf(p.date);
-      total += p.amount;
-      if (p.spread) { const share = p.amount / (4 - k); for (let j = k; j < 4; j++) weeks[j].allow -= share; }
-      else weeks[k].spent += p.amount;
+    for (const x of list) {
+      const k = weekIn(p, x.date);
+      total += x.amount;
+      if (x.spread) { const share = x.amount / (4 - k); for (let j = k; j < 4; j++) weeks[j].allow -= share; }
+      else weeks[k].spent += x.amount;
     }
     weeks.forEach(w => w.left = w.allow - w.spent);
-    return { now, key, fixed, free, weeks, list, total, cur: weekOf(iso(now)) };
+    return { p, fixed, free, weeks, list, total, cur: weekIn(p, iso(today())) };
   }
 
   function render() {
     const r = compute(), w = r.weeks[r.cur];
-    const monthLabel = r.now.toLocaleDateString('en-US', { month: 'long' });
-    const short = r.now.toLocaleDateString('en-US', { month: 'short' });
-    $('#monthName').textContent = monthLabel;
-    $('#weekName').textContent = `Week ${r.cur + 1} of 4 · ${short} ${w.from}–${w.to}`;
+    $('#monthName').textContent = `${md(r.p.start)} – ${md(r.p.end)}`;
+    $('#weekName').textContent = `Week ${r.cur + 1} of 4 · ${md(w.start)} – ${md(w.end)}`;
 
     $('#left').textContent = m(w.left);
     $('#left').classList.toggle('red', w.left < -0.004);
@@ -205,22 +249,47 @@ details[open] summary::after { content: "Done"; }
       `<div class="wk${i < r.cur ? ' past' : ''}${i === r.cur ? ' now' : ''}"><small>W${i + 1}</small><b class="num${x.left < -0.4 ? ' red' : ''}">${m0(x.left)}</b></div>`).join('');
 
     const ml = r.free - r.total;
-    $('#monthLeft').innerHTML = `<span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left this month`;
+    $('#monthLeft').innerHTML = `<span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left until ${md(r.p.next)}`;
 
     const items = [...r.list].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
     $('#purchases').innerHTML = items.length ? items.map(p => {
-      const k = weekOf(p.date), n = 4 - k;
-      const d = new Date(p.date + 'T00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      return `<li><div class="mid"><div>${esc(p.note || p.cat)}</div><small>${esc(p.cat)} · ${d}${p.spread && n > 1 ? ` · spread over ${n} wks` : ''}</small></div>
+      const n = 4 - weekIn(r.p, p.date);
+      return `<li><div class="mid"><div>${esc(p.note || p.cat)}</div><small>${esc(p.cat)} · ${md(day(p.date))}${p.spread && n > 1 ? ` · spread over ${n} wks` : ''}</small></div>
         <span class="num">${m(p.amount)}</span><button class="x" type="button" data-del="${p.id}" aria-label="Delete">×</button></li>`;
-    }).join('') : '<li class="empty">Nothing yet this month.</li>';
+    }).join('') : '<li class="empty">Nothing yet this period.</li>';
 
     const cats = [...new Set([...S.purchases.map(p => p.cat), ...DEFAULT_CATS])];
     $('#cats').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
 
     $('#setupSum').textContent = `${m(S.income)} income − ${m(r.fixed)} fixed = ${m(r.free / 4)}/week`;
     hint();
+    renderAvg();
     renderSync();
+  }
+
+  // Average spending per category over a chosen range. Spread purchases count in full on their date.
+  // The range never starts before your first purchase, so a new app doesn't drag the average down.
+  function renderAvg() {
+    const v = S.avg.range, t0 = today();
+    $('#avgCustom').hidden = v !== 'custom';
+    let from = v === 'custom' ? (S.avg.from ? day(S.avg.from) : null) : addDays(t0, -7 * Number(v) + 1);
+    const to = v === 'custom' && S.avg.to ? day(S.avg.to) : t0;
+    const first = S.purchases.reduce((a, p) => !a || p.date < a ? p.date : a, '');
+    if (!first) { $('#avgNote').textContent = 'No purchases yet.'; $('#avgList').innerHTML = ''; return; }
+    let clipped = false;
+    if (!from || from < day(first)) { from = day(first); clipped = true; }
+    if (to < from) { $('#avgNote').textContent = 'Pick an end date after the start date.'; $('#avgList').innerHTML = ''; return; }
+    const days = daysBetween(from, to) + 1, f = iso(from), t = iso(to);
+    const by = {};
+    let total = 0;
+    for (const p of S.purchases) if (p.date >= f && p.date <= t) { by[p.cat] = (by[p.cat] || 0) + p.amount; total += p.amount; }
+    const perWeek = x => x / days * 7, perMonth = x => x / days * 365.25 / 12;
+    const rows = Object.entries(by).sort((a, b) => b[1] - a[1]);
+    $('#avgNote').textContent = `${md(from)} – ${md(to)} · ${days} day${days === 1 ? '' : 's'}${clipped ? ' (since your first purchase)' : ''}`;
+    $('#avgList').innerHTML = rows.length ? rows.map(([c, x]) => `<li><div class="mid"><div>${esc(c)}</div><div class="bar"><i style="width:${x / rows[0][1] * 100}%"></i></div></div>
+        <div class="end num">${m(perWeek(x))}/wk<small>${m(perMonth(x))}/mo</small></div></li>`).join('') +
+      `<li class="total"><div class="mid"><div>Total</div></div><div class="end num">${m(perWeek(total))}/wk<small>${m(perMonth(total))}/mo</small></div></li>`
+      : '<li class="empty">No purchases in this range.</li>';
   }
 
   function renderBills() {
@@ -233,11 +302,11 @@ details[open] summary::after { content: "Done"; }
   }
 
   function hint() {
-    const amt = parseAmt($('#bAmt').value), k = weekOf(iso(new Date())), n = 4 - k;
+    const amt = parseAmt($('#bAmt').value), p = periodOf(today()), n = 4 - weekIn(p, iso(today()));
     let t = '';
     if ($('#bSpread').checked) {
       t = n > 1 ? (amt > 0 ? `${m(amt / n)}/week off the next ${n} weeks (incl. this one)` : `Splits the cost over the ${n} weeks left`)
-        : 'Last week of the month, so it all counts this week';
+        : 'Last week before payday, so it all counts this week';
     }
     $('#hint').textContent = t;
   }
@@ -247,7 +316,7 @@ details[open] summary::after { content: "Done"; }
   // Each sync gets the whole sheet back, so all devices show the same data.
   let syncing = false, syncTimer, syncErr = '';
   const syncOn = () => !!(S.sync.url && S.sync.key);
-  const budgetOp = () => ({ type: 'budget', income: S.income, bills: S.bills.map(({ name, amount, freq }) => ({ name, amount, freq: freq || 'monthly' })) });
+  const budgetOp = () => ({ type: 'budget', income: S.income, payday: S.payday, bills: S.bills.map(({ name, amount, freq }) => ({ name, amount, freq: freq || 'monthly' })) });
   function queue(op) {
     if (!syncOn()) return;
     if (op.type === 'budget') S.queue = S.queue.filter(o => o.type !== 'budget');  // only the latest budget matters
@@ -282,7 +351,7 @@ details[open] summary::after { content: "Done"; }
       else if (op.type === 'del') list = list.filter(p => p.id !== op.id);
     }
     S.purchases = list;
-    const editing = S.queue.some(o => o.type === 'budget') || document.activeElement?.matches('#income, #bills input, #bills select');
+    const editing = S.queue.some(o => o.type === 'budget') || document.activeElement?.matches('#income, #payday, #bills input, #bills select');
     if (!j.hasBudget) {  // sheet has no budget yet: this device's becomes the starting point
       if (S.income > 0 || S.bills.some(b => b.name || b.amount)) queue(budgetOp());
       return;
@@ -290,6 +359,7 @@ details[open] summary::after { content: "Done"; }
     if (editing) return;
     S.income = j.income;
     $('#income').value = S.income ? S.income.toFixed(2) : '';
+    if (j.payday) { S.payday = j.payday; $('#payday').value = S.payday; }
     const same = S.bills.length === j.bills.length && S.bills.every((b, i) => b.name === j.bills[i].name && b.amount === j.bills[i].amount && (b.freq || 'monthly') === j.bills[i].freq);
     if (!same) { S.bills = j.bills.map(b => ({ id: uid(), ...b })); renderBills(); }
   }
@@ -323,6 +393,16 @@ details[open] summary::after { content: "Done"; }
 
   $('#income').value = S.income ? S.income.toFixed(2) : '';
   $('#income').addEventListener('input', e => { S.income = parseAmt(e.target.value) || 0; save(); queue(budgetOp()); render(); });
+  $('#payday').value = S.payday;
+  $('#payday').addEventListener('input', e => {
+    const d = parseInt(e.target.value, 10);
+    if (!(d >= 1 && d <= 31)) return;
+    S.payday = d; save(); queue(budgetOp()); render();
+  });
+
+  $('#avgRange').value = S.avg.range; $('#avgFrom').value = S.avg.from; $('#avgTo').value = S.avg.to;
+  const editAvg = () => { S.avg = { range: $('#avgRange').value, from: $('#avgFrom').value, to: $('#avgTo').value }; save(); renderAvg(); };
+  ['#avgRange', '#avgFrom', '#avgTo'].forEach(id => $(id).addEventListener('change', editAvg));
 
   const editBill = e => {
     const b = S.bills.find(x => x.id === e.target.dataset.bill);

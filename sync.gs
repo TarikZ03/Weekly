@@ -14,7 +14,7 @@ const PER_MONTH = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 1
 const perMonth = (amount, freq) => Math.round((Number(amount) || 0) * (PER_MONTH[freq] || 1) * 100) / 100;
 
 // Receives a batch of changes from the app: { key, ops: [{type:'add', p}, {type:'del', id}, {type:'budget', income, bills}] }
-// and answers with everything in the sheet: { ok, purchases, hasBudget, income, bills }.
+// and answers with everything in the sheet: { ok, purchases, hasBudget, income, payday, bills }.
 function doPost(e) {
   let body;
   try { body = JSON.parse(e.postData.contents); } catch (err) { return out({ ok: false, error: 'bad request' }); }
@@ -47,7 +47,8 @@ function doPost(e) {
       write(P, rows.filter((_, i) => !gone.has(i)), P_HEAD.length);
       if (budget) {
         const inc = Number(budget.income) || 0;
-        write(B, [['income', 'Monthly income', inc, 'monthly', inc]].concat((budget.bills || []).map(b => {
+        const payday = Math.min(31, Math.max(1, Number(budget.payday) || 1));
+        write(B, [['income', 'Monthly income', inc, 'monthly', inc], ['setting', 'Payday', payday, '', '']].concat((budget.bills || []).map(b => {
           const freq = PER_MONTH[b.freq] ? b.freq : 'monthly';
           return ['expense', text(b.name), Number(b.amount) || 0, freq, perMonth(b.amount, freq)];
         })), B_HEAD.length);
@@ -62,7 +63,7 @@ function doPost(e) {
     const bRows = read(B, B_HEAD.length);
     const inc = bRows.find(r => r[0] === 'income');
     const bills = bRows.filter(r => r[0] === 'expense').map(r => ({ name: String(r[1]), amount: Number(r[2]) || 0, freq: PER_MONTH[r[3]] ? String(r[3]) : 'monthly' }));
-    return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, bills });
+    return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, payday: paydayOf(bRows), bills });
   } finally {
     lock.releaseLock();
   }
@@ -74,29 +75,45 @@ function doGet(e) {
   return out(summary());
 }
 
-// Same rules as the app: (income - expenses per month) / 4 per week; weeks are days 1-7, 8-14, 15-21, 22-end;
+// Same rules as the app: the period runs from payday to the day before the next payday, split into
+// 4 weeks (the last one takes the extra days); (income - expenses per month) / 4 per week;
 // a spread purchase is split evenly over its own week and the weeks after it.
 function summary() {
   const ss = SpreadsheetApp.getActive(), tz = ss.getSpreadsheetTimeZone();
-  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), month = today.slice(0, 7);
-  const weekOf = ds => Math.min(3, Math.floor((Number(ds.slice(8, 10)) - 1) / 7));
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const bRows = read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length), payday = paydayOf(bRows);
+
+  // dates as UTC midnight, so day arithmetic is exact
+  const [Y, M, D] = today.split('-').map(Number);
+  const startIn = (y, mo) => new Date(Date.UTC(y, mo, Math.min(payday, new Date(Date.UTC(y, mo + 1, 0)).getUTCDate())));
+  let start = startIn(Y, M - 1);
+  if (Date.UTC(Y, M - 1, D) < start) start = startIn(Y, M - 2);
+  const next = startIn(start.getUTCFullYear(), start.getUTCMonth() + 1);
+  const str = d => d.toISOString().slice(0, 10), from = str(start), to = str(new Date(next - 864e5));
+  const weekOf = ds => Math.min(3, Math.floor((Date.parse(ds) - start) / 6048e5));
 
   let income = 0, fixed = 0;
-  for (const [type, , amount, freq] of read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length)) {
-    if (type === 'income') income = Number(amount) || 0; else fixed += perMonth(amount, freq);
+  for (const [type, , amount, freq] of bRows) {
+    if (type === 'income') income = Number(amount) || 0;
+    else if (type === 'expense') fixed += perMonth(amount, freq);
   }
   const free = income - fixed, allow = [1, 2, 3, 4].map(() => free / 4), spent = [0, 0, 0, 0];
   let total = 0;
   for (const r of read(sheet(ss, PURCHASES, P_HEAD), P_HEAD.length)) {
     const ds = day(r[1], tz);
-    if (!ds.startsWith(month)) continue;
+    if (ds < from || ds > to) continue;
     const k = weekOf(ds), amt = Number(r[4]) || 0;
     total += amt;
     if (r[5] === 'yes') for (let j = k; j < 4; j++) allow[j] -= amt / (4 - k);
     else spent[k] += amt;
   }
   const cur = weekOf(today), round = n => Math.round(n * 100) / 100;
-  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total) };
+  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total), nextPayday: str(next) };
+}
+
+function paydayOf(bRows) {
+  const r = bRows.find(r => r[0] === 'setting' && r[1] === 'Payday');
+  return r ? Math.min(31, Math.max(1, Number(r[2]) || 1)) : 1;
 }
 
 function sheet(ss, name, head) {
