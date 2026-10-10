@@ -85,9 +85,14 @@ details[open] summary::after { content: "Done"; }
 .setup { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .setup label { font-size: 13px; color: var(--muted); margin-top: 6px; }
 .link { color: var(--green); font-weight: 600; font-size: 14px; align-self: flex-start; padding: 4px 0; }
-#avgBox summary { color: var(--text); font-weight: 600; }
-#avgBox summary::after { content: "Show"; }
-#avgBox[open] summary::after { content: "Hide"; }
+#avgBox summary, #invBox summary { color: var(--text); font-weight: 600; }
+#avgBox summary::after, #invBox summary::after { content: "Show"; }
+#avgBox[open] summary::after, #invBox[open] summary::after { content: "Hide"; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; background: var(--soft); border-radius: 8px; padding: 3px; }
+.seg button { padding: 7px 4px; border-radius: 6px; font-size: 14px; color: var(--muted); }
+.seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
+.sub-h { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+.green { color: var(--green); }
 #avgBox select { width: 100%; }
 .list .end { text-align: right; flex: 0 0 auto; }
 .list .end small { display: block; color: var(--muted); font-size: 13px; }
@@ -148,6 +153,30 @@ details[open] summary::after { content: "Done"; }
     </div>
   </details>
 
+  <details id="invBox">
+    <summary><span>Investments</span></summary>
+    <div class="setup">
+      <div class="seg" id="invKind">
+        <button type="button" data-kind="buy" class="on">Buy</button>
+        <button type="button" data-kind="sell">Sell</button>
+        <button type="button" data-kind="value">Value now</button>
+      </div>
+      <form id="invForm" class="setup" style="margin:0" autocomplete="off">
+        <div class="row" id="invTrade">
+          <input id="iShares" class="num" inputmode="decimal" placeholder="Shares" aria-label="Shares">
+          <input id="iPrice" class="num" inputmode="decimal" placeholder="Price/share" aria-label="Price per share">
+          <input id="iFees" class="num" inputmode="decimal" placeholder="Fees" aria-label="Fees">
+        </div>
+        <div class="row" id="invValueRow" hidden>
+          <input id="iValue" class="num" inputmode="decimal" placeholder="What all your shares are worth now (€)" aria-label="Value now">
+        </div>
+        <div class="row"><span class="hint" id="invHint"></span><button class="add" type="submit">Add</button></div>
+      </form>
+      <ul class="list" id="invStats"></ul>
+      <ul class="list" id="invList"></ul>
+    </div>
+  </details>
+
   <details id="setupBox">
     <summary><span><span id="setupSum"></span><span id="syncNote" class="red"></span></span></summary>
     <div class="setup">
@@ -181,6 +210,7 @@ details[open] summary::after { content: "Done"; }
     sync: raw.sync || { url: '', key: '' },   // Google Sheet sync settings, only ever stored on this device
     queue: Array.isArray(raw.queue) ? raw.queue : [],  // changes not yet sent to the sheet
     avg: raw.avg || { range: '4', from: '', to: '' },  // chosen Averages range (this device only)
+    inv: Array.isArray(raw.inv) ? raw.inv : [],  // investment entries: buy / sell / value
   };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 
@@ -249,7 +279,7 @@ details[open] summary::after { content: "Done"; }
       `<div class="wk${i < r.cur ? ' past' : ''}${i === r.cur ? ' now' : ''}"><small>W${i + 1}</small><b class="num${x.left < -0.4 ? ' red' : ''}">${m0(x.left)}</b></div>`).join('');
 
     const ml = r.free - r.total;
-    $('#monthLeft').innerHTML = `<span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left until ${md(r.p.next)}`;
+    $('#monthLeft').innerHTML = `${m(r.total)} spent · <span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left until ${md(r.p.next)}`;
 
     const items = [...r.list].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
     $('#purchases').innerHTML = items.length ? items.map(p => {
@@ -264,6 +294,7 @@ details[open] summary::after { content: "Done"; }
     $('#setupSum').textContent = `${m(S.income)} income − ${m(r.fixed)} fixed = ${m(r.free / 4)}/week`;
     hint();
     renderAvg();
+    renderInv(r.p);
     renderSync();
   }
 
@@ -290,6 +321,45 @@ details[open] summary::after { content: "Done"; }
         <div class="end num">${m(perWeek(x))}/wk<small>${m(perMonth(x))}/mo</small></div></li>`).join('') +
       `<li class="total"><div class="mid"><div>Total</div></div><div class="end num">${m(perWeek(total))}/wk<small>${m(perMonth(total))}/mo</small></div></li>`
       : '<li class="empty">No purchases in this range.</li>';
+  }
+
+  // ---------- investments ----------
+  // buy: you put in shares × price + fees. sell: you take out shares × price − fees.
+  // value: what all your shares are worth that day. Gain/loss = latest value + taken out − put in.
+  let invKind = 'buy';
+  const invAmt = e => e.kind === 'buy' ? e.shares * e.price + e.fees : e.kind === 'sell' ? e.shares * e.price - e.fees : e.value;
+  const signed = n => (n > 0.004 ? '+' : '') + m(n);
+  function renderInv(p) {
+    const sum = (list, kind) => list.filter(e => e.kind === kind).reduce((a, e) => a + invAmt(e), 0);
+    const inPeriod = S.inv.filter(e => e.date >= p.from && e.date <= p.to);
+    const spent = S.purchases.filter(x => x.date >= p.from && x.date <= p.to).reduce((a, x) => a + x.amount, 0);
+    const byTime = [...S.inv].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
+    const last = byTime.find(e => e.kind === 'value');
+    const row = (label, val, cls = '') => `<li><div class="mid"><div>${label}</div></div><div class="end num ${cls}">${val}</div></li>`;
+    let html = `<li class="sub-h">This period (${md(p.start)} – ${md(p.end)})</li>`
+      + row('Put in', m(sum(inPeriod, 'buy'))) + row('Taken out', m(sum(inPeriod, 'sell'))) + row('Spent on purchases', m(spent))
+      + '<li class="sub-h">All time</li>';
+    if (last) {
+      const gain = last.value + sum(S.inv, 'sell') - sum(S.inv, 'buy');
+      html += row(`Worth now <small class="muted">(${md(day(last.date))})</small>`, m(last.value))
+        + row('Gain / loss', signed(gain), gain < -0.004 ? 'red' : gain > 0.004 ? 'green' : '');
+    } else {
+      html += row('Put in', m(sum(S.inv, 'buy'))) + row('Taken out', m(sum(S.inv, 'sell')))
+        + '<li class="empty">Add a "Value now" to see your gain or loss.</li>';
+    }
+    $('#invStats').innerHTML = html;
+    $('#invList').innerHTML = (byTime.length ? '<li class="sub-h">Entries</li>' : '') + byTime.slice(0, 12).map(e => {
+      const what = e.kind === 'value' ? 'Value now'
+        : `${e.kind === 'buy' ? 'Buy' : 'Sell'} · ${e.shares} × ${m(e.price)}${e.fees ? ` ${e.kind === 'buy' ? '+' : '−'} ${m(e.fees)} fees` : ''}`;
+      return `<li><div class="mid"><div>${what}</div><small>${md(day(e.date))}</small></div>
+        <span class="num">${e.kind === 'sell' ? '+' : ''}${m(invAmt(e))}</span><button class="x" type="button" data-delinv="${e.id}" aria-label="Delete">×</button></li>`;
+    }).join('');
+    invHint();
+  }
+  function invHint() {
+    const sh = parseAmt($('#iShares').value), pr = parseAmt($('#iPrice').value), fe = parseAmt($('#iFees').value) || 0;
+    $('#invHint').textContent = invKind !== 'value' && sh > 0 && pr > 0
+      ? (invKind === 'buy' ? `You put in ${m(sh * pr + fe)}` : `You get ${m(sh * pr - fe)}`) : '';
   }
 
   function renderBills() {
@@ -351,6 +421,14 @@ details[open] summary::after { content: "Done"; }
       else if (op.type === 'del') list = list.filter(p => p.id !== op.id);
     }
     S.purchases = list;
+    if (Array.isArray(j.inv)) {
+      let inv = j.inv;
+      for (const op of S.queue) {
+        if (op.type === 'inv') inv = inv.filter(e => e.id !== op.e.id).concat([op.e]);
+        else if (op.type === 'invdel') inv = inv.filter(e => e.id !== op.id);
+      }
+      S.inv = inv;
+    }
     const editing = S.queue.some(o => o.type === 'budget') || document.activeElement?.matches('#income, #payday, #bills input, #bills select');
     if (!j.hasBudget) {  // sheet has no budget yet: this device's becomes the starting point
       if (S.income > 0 || S.bills.some(b => b.name || b.amount)) queue(budgetOp());
@@ -398,6 +476,36 @@ details[open] summary::after { content: "Done"; }
     const d = parseInt(e.target.value, 10);
     if (!(d >= 1 && d <= 31)) return;
     S.payday = d; save(); queue(budgetOp()); render();
+  });
+
+  $('#invKind').addEventListener('click', e => {
+    const k = e.target.dataset?.kind;
+    if (!k) return;
+    invKind = k;
+    document.querySelectorAll('#invKind button').forEach(b => b.classList.toggle('on', b.dataset.kind === k));
+    $('#invTrade').hidden = k === 'value'; $('#invValueRow').hidden = k !== 'value';
+    invHint();
+  });
+  ['#iShares', '#iPrice', '#iFees'].forEach(id => $(id).addEventListener('input', invHint));
+  $('#invForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const entry = { id: uid(), date: iso(new Date()), kind: invKind, shares: 0, price: 0, fees: 0, value: 0, t: String(Date.now()) };
+    if (invKind === 'value') {
+      entry.value = parseAmt($('#iValue').value);
+      if (!(entry.value >= 0)) { $('#iValue').focus(); return; }
+    } else {
+      entry.shares = parseAmt($('#iShares').value); entry.price = parseAmt($('#iPrice').value); entry.fees = parseAmt($('#iFees').value) || 0;
+      if (!(entry.shares > 0)) { $('#iShares').focus(); return; }
+      if (!(entry.price > 0)) { $('#iPrice').focus(); return; }
+    }
+    S.inv.push(entry); save(); queue({ type: 'inv', e: entry });
+    ['#iShares', '#iPrice', '#iFees', '#iValue'].forEach(id => $(id).value = '');
+    render();
+  });
+  $('#invList').addEventListener('click', e => {
+    const id = e.target.dataset?.delinv;
+    if (!id) return;
+    S.inv = S.inv.filter(x => x.id !== id); save(); queue({ type: 'invdel', id }); render();
   });
 
   $('#avgRange').value = S.avg.range; $('#avgFrom').value = S.avg.from; $('#avgTo').value = S.avg.to;
@@ -449,6 +557,7 @@ details[open] summary::after { content: "Done"; }
     if (url && !/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) { $('#syncStatus').textContent = 'That is not a Google Apps Script URL'; return; }
     S.sync = { url, key }; S.queue = []; syncErr = ''; save();
     S.purchases.forEach(p => queue({ type: 'add', p }));
+    S.inv.forEach(e => queue({ type: 'inv', e }));
     clearTimeout(syncTimer); flush();
   });
   window.addEventListener('online', flush);
