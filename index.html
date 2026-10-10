@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Weekly">
+<meta name="theme-color" content="#F7F8FA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<title>Weekly</title>
+<style>
+:root {
+  --bg: #F7F8FA; --card: #FFFFFF; --line: #E4E7EB; --text: #2B2E34; --muted: #8A8F98;
+  --green: #22A06B; --red: #D9365E; --soft: #EEF0F3;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111214; --card: #1B1D21; --line: #2A2D33; --text: #ECEDEF; --muted: #8E939C; --green: #4CC38A; --red: #F0698A; --soft: #24272C; }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 16px/1.4 -apple-system, system-ui, "Segoe UI", sans-serif;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(32px + env(safe-area-inset-bottom, 0px)); }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; }
+input { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 10px 12px; min-width: 0; outline: none; }
+input:focus { border-color: var(--muted); }
+main { max-width: 30rem; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.red { color: var(--red); }
+
+.top { display: flex; justify-content: space-between; color: var(--muted); font-size: 14px; }
+.hero { text-align: center; }
+.hero .big { font-size: 52px; font-weight: 700; letter-spacing: -.02em; line-height: 1.05; color: var(--green); }
+.hero .big.red { color: var(--red); }
+.hero .sub { color: var(--muted); margin-top: 4px; }
+
+.weeks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.wk { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 6px; text-align: center; }
+.wk small { display: block; color: var(--muted); font-size: 12px; }
+.wk b { font-weight: 600; font-size: 15px; }
+.wk.past { opacity: .45; }
+.wk.now { border-color: var(--text); }
+.month { text-align: center; color: var(--muted); font-size: 14px; margin-top: -12px; }
+
+form { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > input { flex: 1; }
+.amt { flex: 0 0 7rem !important; text-align: right; }
+.switch { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); user-select: none; cursor: pointer; white-space: nowrap; }
+.switch input { appearance: none; width: 38px; height: 22px; border-radius: 11px; background: var(--line); border: 0; padding: 0; position: relative; flex: 0 0 auto; cursor: pointer; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch input:checked { background: var(--green); }
+.switch input:checked::after { transform: translateX(16px); }
+.add { margin-left: auto; background: var(--text); color: var(--bg); border-radius: 8px; padding: 10px 18px; font-weight: 600; }
+.hint { font-size: 13px; color: var(--muted); min-height: 1.2em; }
+
+.head { display: flex; justify-content: space-between; align-items: baseline; }
+.head .link { font-size: 13px; }
+h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.list li:last-child { border-bottom: 0; }
+.list .mid { flex: 1; min-width: 0; }
+.list .mid div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .mid small { color: var(--muted); font-size: 13px; }
+.x { color: var(--muted); font-size: 20px; line-height: 1; width: 28px; height: 28px; flex: 0 0 auto; }
+.empty { color: var(--muted); font-size: 14px; padding: 6px 0; }
+
+details { border-top: 1px solid var(--line); padding-top: 14px; }
+summary { cursor: pointer; color: var(--muted); font-size: 14px; list-style: none; display: flex; justify-content: space-between; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "Edit"; color: var(--text); font-weight: 600; }
+details[open] summary::after { content: "Done"; }
+.setup { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.setup label { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.link { color: var(--green); font-weight: 600; font-size: 14px; align-self: flex-start; padding: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><span id="monthName"></span><span id="weekName"></span></div>
+
+  <div class="hero">
+    <div class="big num" id="left"></div>
+    <div class="sub" id="leftSub"></div>
+  </div>
+
+  <div>
+    <div class="weeks" id="weeks"></div>
+  </div>
+  <div class="month num" id="monthLeft"></div>
+
+  <form id="buy" autocomplete="off">
+    <div class="row">
+      <input id="bName" placeholder="What did you buy?" maxlength="60" aria-label="Name">
+      <input id="bAmt" class="amt num" inputmode="decimal" placeholder="€0.00" aria-label="Amount">
+    </div>
+    <div class="row">
+      <input id="bCat" placeholder="Category" list="cats" maxlength="30" aria-label="Category">
+      <label class="switch"><input type="checkbox" id="bSpread">Spread</label>
+      <button class="add" type="submit">Add</button>
+    </div>
+    <div class="hint" id="hint"></div>
+    <datalist id="cats"></datalist>
+  </form>
+
+  <section>
+    <div class="head"><h2>This month</h2><button class="link" type="button" id="export">Export CSV</button></div>
+    <ul class="list" id="purchases"></ul>
+  </section>
+
+  <details id="setupBox">
+    <summary><span><span id="setupSum"></span><span id="syncNote" class="red"></span></span></summary>
+    <div class="setup">
+      <label for="income">Monthly income (after tax)</label>
+      <input id="income" class="num" inputmode="decimal" placeholder="€0.00">
+      <label>Recurring expenses</label>
+      <div id="bills" class="setup" style="margin:0"></div>
+      <button class="link" type="button" id="addBill">+ Add expense</button>
+      <label for="syncUrl">Google Sheet sync (optional)</label>
+      <input id="syncUrl" placeholder="Script URL: https://script.google.com/…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <input id="syncKey" type="password" placeholder="Key" autocomplete="off">
+      <div class="row"><button class="link" type="button" id="syncConnect">Connect</button><span class="hint" id="syncStatus"></span></div>
+    </div>
+  </details>
+</main>
+
+<script>
+(() => {
+  // Data lives in this browser only. Same key/shape as the previous version, so old data carries over.
+  const KEY = 'weekly:v1';
+  let raw = {};
+  try { raw = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch {}
+  const OLD_CATS = { groceries: 'Groceries', fun: 'Fun' };
+  const S = {
+    income: Number(raw.income) || 0,
+    bills: Array.isArray(raw.bills) ? raw.bills : [],
+    purchases: (Array.isArray(raw.purchases) ? raw.purchases : []).map(p => ({ ...p, cat: OLD_CATS[p.cat] || p.cat || 'Other' })),
+    sync: raw.sync || { url: '', key: '' },   // Google Sheet sync settings, only ever stored on this device
+    queue: Array.isArray(raw.queue) ? raw.queue : [],  // changes not yet sent to the sheet
+  };
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+
+  const $ = s => document.querySelector(s);
+  const fmt = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' });
+  const fmt0 = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+  const m = n => fmt.format(Math.abs(n) < .005 ? 0 : n);
+  const m0 = n => fmt0.format(Math.abs(n) < .5 ? 0 : n);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const parseAmt = v => { const n = parseFloat(String(v).replace(/[€\s]/g, '').replace(',', '.')); return isFinite(n) ? Math.round(n * 100) / 100 : NaN; };
+  const pad = n => String(n).padStart(2, '0');
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const DEFAULT_CATS = ['Groceries', 'Eating out', 'Transport', 'Shopping', 'Fun'];
+
+  // The month is split into 4 weeks: days 1-7, 8-14, 15-21, 22-end.
+  const weekOf = ds => Math.min(3, Math.floor((Number(ds.slice(8, 10)) - 1) / 7));
+
+  // Weekly allowance = (income - recurring) / 4.
+  // A normal purchase comes out of its own week. A spread purchase is split evenly
+  // over its own week and every week left after it.
+  function compute() {
+    const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
+    const key = `${y}-${pad(mo + 1)}`, dim = new Date(y, mo + 1, 0).getDate();
+    const fixed = S.bills.reduce((a, b) => a + (b.amount || 0), 0);
+    const free = S.income - fixed;
+    const weeks = [0, 1, 2, 3].map(i => ({ from: i * 7 + 1, to: i === 3 ? dim : i * 7 + 7, allow: free / 4, spent: 0 }));
+    const list = S.purchases.filter(p => p.date && p.date.startsWith(key));
+    let total = 0;
+    for (const p of list) {
+      const k = weekOf(p.date);
+      total += p.amount;
+      if (p.spread) { const share = p.amount / (4 - k); for (let j = k; j < 4; j++) weeks[j].allow -= share; }
+      else weeks[k].spent += p.amount;
+    }
+    weeks.forEach(w => w.left = w.allow - w.spent);
+    return { now, key, fixed, free, weeks, list, total, cur: weekOf(iso(now)) };
+  }
+
+  function render() {
+    const r = compute(), w = r.weeks[r.cur];
+    const monthLabel = r.now.toLocaleDateString('en-US', { month: 'long' });
+    const short = r.now.toLocaleDateString('en-US', { month: 'short' });
+    $('#monthName').textContent = monthLabel;
+    $('#weekName').textContent = `Week ${r.cur + 1} of 4 · ${short} ${w.from}–${w.to}`;
+
+    $('#left').textContent = m(w.left);
+    $('#left').classList.toggle('red', w.left < -0.004);
+    $('#leftSub').textContent = S.income > 0 ? `left this week · of ${m(w.allow)}` : 'Set your income and expenses below';
+
+    $('#weeks').innerHTML = r.weeks.map((x, i) =>
+      `<div class="wk${i < r.cur ? ' past' : ''}${i === r.cur ? ' now' : ''}"><small>W${i + 1}</small><b class="num${x.left < -0.4 ? ' red' : ''}">${m0(x.left)}</b></div>`).join('');
+
+    const ml = r.free - r.total;
+    $('#monthLeft').innerHTML = `<span class="${ml < 0 ? 'red' : ''}">${m(ml)}</span> left this month`;
+
+    const items = [...r.list].sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
+    $('#purchases').innerHTML = items.length ? items.map(p => {
+      const k = weekOf(p.date), n = 4 - k;
+      const d = new Date(p.date + 'T00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return `<li><div class="mid"><div>${esc(p.note || p.cat)}</div><small>${esc(p.cat)} · ${d}${p.spread && n > 1 ? ` · spread over ${n} wks` : ''}</small></div>
+        <span class="num">${m(p.amount)}</span><button class="x" type="button" data-del="${p.id}" aria-label="Delete">×</button></li>`;
+    }).join('') : '<li class="empty">Nothing yet this month.</li>';
+
+    const cats = [...new Set([...S.purchases.map(p => p.cat), ...DEFAULT_CATS])];
+    $('#cats').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
+
+    $('#setupSum').textContent = `${m(S.income)} income − ${m(r.fixed)} fixed = ${m(r.free / 4)}/week`;
+    hint();
+    renderSync();
+  }
+
+  function renderBills() {
+    $('#bills').innerHTML = S.bills.map(b => `<div class="row">
+      <input data-bill="${b.id}" data-f="name" value="${esc(b.name)}" placeholder="Rent, insurance, Spotify…" maxlength="40">
+      <input data-bill="${b.id}" data-f="amount" class="amt num" inputmode="decimal" value="${b.amount ? b.amount.toFixed(2) : ''}" placeholder="€0.00">
+      <button class="x" type="button" data-delbill="${b.id}" aria-label="Remove">×</button></div>`).join('');
+  }
+
+  function hint() {
+    const amt = parseAmt($('#bAmt').value), k = weekOf(iso(new Date())), n = 4 - k;
+    let t = '';
+    if ($('#bSpread').checked) {
+      t = n > 1 ? (amt > 0 ? `${m(amt / n)}/week off the next ${n} weeks (incl. this one)` : `Splits the cost over the ${n} weeks left`)
+        : 'Last week of the month, so it all counts this week';
+    }
+    $('#hint').textContent = t;
+  }
+
+  // ---------- Google Sheet sync (see sync.gs) ----------
+  // Every change is queued on the device and sent in batches, so nothing is lost while offline.
+  let syncing = false, syncTimer, syncErr = '';
+  const syncOn = () => !!(S.sync.url && S.sync.key);
+  const budgetOp = () => ({ type: 'budget', income: S.income, bills: S.bills.map(({ name, amount }) => ({ name, amount })) });
+  function queue(op) {
+    if (!syncOn()) return;
+    if (op.type === 'budget') S.queue = S.queue.filter(o => o.type !== 'budget');  // only the latest budget matters
+    S.queue.push({ ...op, qid: uid() });
+    save();
+    clearTimeout(syncTimer); syncTimer = setTimeout(flush, 1500);
+  }
+  async function flush() {
+    if (!syncOn() || syncing || !S.queue.length) return renderSync();
+    syncing = true; renderSync();
+    const ops = S.queue.slice(0, 500);
+    try {
+      const res = await fetch(S.sync.url, { method: 'POST', body: JSON.stringify({ key: S.sync.key, ops }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || 'failed');
+      const sent = new Set(ops.map(o => o.qid));
+      S.queue = S.queue.filter(o => !sent.has(o.qid)); save();
+      syncErr = '';
+    } catch (err) {
+      syncErr = err.message === 'wrong key' ? 'Wrong key' : "Couldn't reach the sheet, will retry";
+    }
+    syncing = false; renderSync();
+    if (!syncErr && S.queue.length) flush();
+  }
+  function renderSync() {
+    const n = S.queue.length, waiting = n ? ` (${n} change${n === 1 ? '' : 's'} waiting)` : '';
+    $('#syncStatus').textContent = !syncOn() ? 'Not connected' : syncing ? 'Syncing…' : syncErr ? syncErr + waiting : n ? `${n} change${n === 1 ? '' : 's'} waiting` : 'Synced ✓';
+    $('#syncNote').textContent = syncOn() && syncErr ? ' · not synced' : '';
+  }
+
+  // ---------- events ----------
+  $('#buy').addEventListener('submit', e => {
+    e.preventDefault();
+    const amt = parseAmt($('#bAmt').value);
+    if (!(amt > 0)) { $('#bAmt').focus(); return; }
+    S.purchases.push({ id: uid(), note: $('#bName').value.trim(), cat: $('#bCat').value.trim() || 'Other',
+      amount: amt, date: iso(new Date()), spread: $('#bSpread').checked, t: String(Date.now()) });
+    save();
+    queue({ type: 'add', p: S.purchases.at(-1) });
+    $('#bName').value = ''; $('#bAmt').value = ''; $('#bCat').value = ''; $('#bSpread').checked = false;
+    render();
+    $('#bName').focus();
+  });
+  $('#bAmt').addEventListener('input', hint);
+  $('#bSpread').addEventListener('change', hint);
+
+  $('#purchases').addEventListener('click', e => {
+    const id = e.target.dataset?.del;
+    if (!id) return;
+    S.purchases = S.purchases.filter(p => p.id !== id); save(); queue({ type: 'del', id }); render();
+  });
+
+  $('#income').value = S.income ? S.income.toFixed(2) : '';
+  $('#income').addEventListener('input', e => { S.income = parseAmt(e.target.value) || 0; save(); queue(budgetOp()); render(); });
+
+  $('#bills').addEventListener('input', e => {
+    const b = S.bills.find(x => x.id === e.target.dataset.bill);
+    if (!b) return;
+    if (e.target.dataset.f === 'name') b.name = e.target.value;
+    else b.amount = parseAmt(e.target.value) || 0;
+    save(); queue(budgetOp()); render();
+  });
+  $('#bills').addEventListener('click', e => {
+    const id = e.target.dataset?.delbill;
+    if (!id) return;
+    S.bills = S.bills.filter(b => b.id !== id); save(); queue(budgetOp()); renderBills(); render();
+  });
+  $('#addBill').addEventListener('click', () => {
+    S.bills.push({ id: uid(), name: '', amount: 0 }); save(); renderBills();
+    $('#bills .row:last-child input').focus();
+  });
+
+  // All purchases ever (every month) as a CSV. On iPhone this opens the share sheet → "Save to Files".
+  $('#export').addEventListener('click', async () => {
+    const q = v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    const rows = [...S.purchases].sort((a, b) => (a.date + a.t).localeCompare(b.date + b.t))
+      .map(p => [p.date, q(p.note || ''), q(p.cat), p.amount.toFixed(2), p.spread ? 'yes' : 'no'].join(','));
+    const csv = ['date,name,category,amount,spread', ...rows].join('\n') + '\n';
+    const file = new File([csv], `spending-${iso(new Date())}.csv`, { type: 'text/csv' });
+    if (navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; } catch (err) { if (err.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = file.name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // Connect (or reconnect) sends everything once; the sheet ignores duplicates.
+  $('#syncUrl').value = S.sync.url; $('#syncKey').value = S.sync.key;
+  $('#syncConnect').addEventListener('click', () => {
+    const url = $('#syncUrl').value.trim(), key = $('#syncKey').value.trim();
+    if (url && !/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) { $('#syncStatus').textContent = 'That is not a Google Apps Script URL'; return; }
+    S.sync = { url, key }; S.queue = []; syncErr = ''; save();
+    S.purchases.forEach(p => queue({ type: 'add', p }));
+    queue(budgetOp());
+    clearTimeout(syncTimer); flush();
+  });
+  window.addEventListener('online', flush);
+
+  // refresh when reopened on a new day / week / month
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); flush(); } });
+
+  if (!(S.income > 0)) $('#setupBox').open = true;
+  renderBills();
+  render();
+  flush();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>
