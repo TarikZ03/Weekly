@@ -58,7 +58,8 @@ main { max-width: 30rem; margin: 0 auto; display: flex; flex-direction: column; 
 
 form { display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; gap: 8px; align-items: center; }
-.row > input { flex: 1; }
+.row > input, .row > select { flex: 1; }
+select.placeholder { color: var(--muted); }
 .amt { flex: 0 0 7rem !important; text-align: right; }
 .switch { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); user-select: none; cursor: pointer; white-space: nowrap; }
 .switch input { appearance: none; width: 38px; height: 22px; border-radius: 11px; background: var(--line); border: 0; padding: 0; position: relative; flex: 0 0 auto; cursor: pointer; transition: background .15s; }
@@ -127,12 +128,11 @@ details[open] summary::after { content: "Done"; }
       <input id="bAmt" class="amt num" inputmode="decimal" placeholder="€0.00" aria-label="Amount">
     </div>
     <div class="row">
-      <input id="bCat" placeholder="Category" list="cats" maxlength="30" aria-label="Category">
+      <select id="bCat" class="placeholder" aria-label="Category"></select>
       <label class="switch"><input type="checkbox" id="bSpread">Spread</label>
       <button class="add" type="submit">Add</button>
     </div>
     <div class="hint" id="hint"></div>
-    <datalist id="cats"></datalist>
   </form>
 
   <section>
@@ -294,8 +294,7 @@ details[open] summary::after { content: "Done"; }
         <span class="num">${m(p.amount)}</span><button class="x" type="button" data-del="${p.id}" aria-label="Delete">×</button></li>`;
     }).join('') : '<li class="empty">Nothing yet this period.</li>';
 
-    const cats = [...new Set([...S.purchases.map(p => p.cat), ...DEFAULT_CATS])];
-    $('#cats').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
+    renderCats();
 
     $('#setupSum').textContent = `${m(S.income)} income − ${m(r.fixed)} fixed = ${m(r.free / 4)}/week`;
     hint();
@@ -361,6 +360,22 @@ details[open] summary::after { content: "Done"; }
     const sh = parseNum($('#iShares').value), pr = parseAmt($('#iPrice').value), fe = parseAmt($('#iFees').value) || 0;
     $('#invHint').textContent = sh > 0 && pr > 0
       ? (invKind === 'buy' ? `You put in ${m(sh * pr + fe)}` : `You get ${m(sh * pr - fe)}`) : '';
+  }
+
+  // Category dropdown: the defaults, anything used before, Other, and a way to add a new one.
+  // Only rebuilt when the list changes, so an open picker isn't disturbed by a background sync.
+  let newCats = [], catsShown = '';
+  function renderCats() {
+    const cats = [...new Set([...DEFAULT_CATS, ...S.purchases.map(p => p.cat), ...newCats])].filter(c => c !== 'Other').concat('Other');
+    const sel = $('#bCat'), key = cats.join('\n');
+    if (key !== catsShown) {
+      const keep = sel.value;
+      sel.innerHTML = '<option value="">Category</option>' + cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')
+        + '<option value="__new">+ New category…</option>';
+      sel.value = cats.includes(keep) ? keep : '';
+      catsShown = key;
+    }
+    sel.classList.toggle('placeholder', !sel.value);
   }
 
   function renderBills() {
@@ -453,15 +468,23 @@ details[open] summary::after { content: "Done"; }
     e.preventDefault();
     const amt = parseAmt($('#bAmt').value);
     if (!(amt > 0)) { $('#bAmt').focus(); return; }
-    S.purchases.push({ id: uid(), note: $('#bName').value.trim(), cat: $('#bCat').value.trim() || 'Other',
+    S.purchases.push({ id: uid(), note: $('#bName').value.trim(), cat: $('#bCat').value || 'Other',
       amount: amt, date: iso(new Date()), spread: $('#bSpread').checked, t: String(Date.now()) });
     save();
     queue({ type: 'add', p: S.purchases.at(-1) });
-    $('#bName').value = ''; $('#bAmt').value = ''; $('#bCat').value = ''; $('#bSpread').checked = false;
+    $('#bName').value = ''; $('#bAmt').value = ''; $('#bCat').value = ''; $('#bSpread').checked = false; renderCats();
     render();
     $('#bName').focus();
   });
   $('#bAmt').addEventListener('input', hint);
+  $('#bCat').addEventListener('change', e => {
+    if (e.target.value === '__new') {
+      const name = (prompt('Name of the new category') || '').trim().slice(0, 30);
+      if (name && name !== '__new') { newCats.push(name); catsShown = ''; renderCats(); e.target.value = name; }
+      else e.target.value = '';
+    }
+    renderCats();
+  });
   $('#bSpread').addEventListener('change', hint);
 
   $('#purchases').addEventListener('click', e => {
