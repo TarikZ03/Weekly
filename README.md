@@ -53,3 +53,18 @@ Download the data as CSV any time from the sheet: File → Download → CSV.
 
 It shows this pay period's totals and refreshes about every 15 minutes (iOS decides exactly when).
 The copied script contains your URL and key, so don't share it. `widget.js` in this repo has placeholders only.
+
+## Archive (one copy per pay period)
+After each pay period ends, the next sync saves a copy of just that period (its purchases, its
+investments, and the budget at that moment) as its own spreadsheet, e.g. `Weekly 2026-09-23 – 2026-10-22`,
+in a **Weekly archive** folder in your Google Drive. The main sheet keeps everything and is never
+changed by this. Each period is saved once.
+
+It needs one extra permission: access to files the script creates itself (nothing else in your Drive).
+1. In Apps Script: Project Settings (gear) → tick **Show "appsscript.json" manifest file in editor**.
+2. Back in the Editor, open `appsscript.json` and replace it with the one in this repo. Save.
+3. Next to **Services** click **+** and add **Drive API**, then again and add **Google Sheets API**
+   (this switches those APIs on for the script; the code calls them directly).
+4. Pick `testArchive` in the function dropdown next to "Debug" → **Run** → allow access.
+   A `Weekly TEST …` copy appears in the Weekly archive folder (delete it afterwards).
+5. Deploy → Manage deployments → ✏️ → Version: New version → Deploy.

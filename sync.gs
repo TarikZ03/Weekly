@@ -4,14 +4,18 @@
 //
 // Two-way: the app sends its changes, and gets the whole sheet back in return, so every device
 // shows the same data. Nothing works without the key.
+//
+// Archive: after each pay period ends, a copy of just that period (purchases, investments and the
+// budget) is saved as its own spreadsheet in a "Weekly archive" folder in your Drive. The main sheet
+// is never changed by this. Needs the permissions in appsscript.json (see README.md).
 
 const KEY = 'CHANGE-ME';  // replace with your own long random text, and enter the same text in the app
 
 const PURCHASES = 'Purchases', BUDGET = 'Budget', INVEST = 'Investments';
 const P_HEAD = ['id', 'date', 'name', 'category', 'amount', 'spread', 'added'];
 const B_HEAD = ['type', 'name', 'amount', 'frequency', 'per month'];
-// type is buy / sell / value. amount: buy = shares × price + fees (put in), sell = shares × price − fees
-// (taken out), value = what all shares were worth that day.
+// type is buy / sell (older rows may say value). amount: buy = shares × price + fees (put in),
+// sell = shares × price − fees (taken out).
 const I_HEAD = ['id', 'date', 'type', 'shares', 'price', 'fees', 'amount', 'added'];
 const PER_MONTH = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12 };
 const perMonth = (amount, freq) => Math.round((Number(amount) || 0) * (PER_MONTH[freq] || 1) * 100) / 100;
@@ -78,6 +82,7 @@ function doPost(e) {
       shares: Number(r[3]) || 0, price: Number(r[4]) || 0, fees: Number(r[5]) || 0,
       value: r[2] === 'value' ? Number(r[6]) || 0 : 0, t: String(r[7]),
     }));
+    archiveSafe(ss);
     return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, payday: paydayOf(bRows), bills, inv });
   } finally {
     lock.releaseLock();
@@ -87,7 +92,14 @@ function doPost(e) {
 // Totals only (this period), for the home-screen widget: GET <url>?key=...
 function doGet(e) {
   if (KEY === 'CHANGE-ME' || e.parameter.key !== KEY) return out({ ok: false, error: 'wrong key' });
-  return out(summary());
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    archiveSafe(SpreadsheetApp.getActive());
+    return out(summary());
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Same rules as the app: the period runs from payday to the day before the next payday, split into
@@ -98,13 +110,7 @@ function summary() {
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const bRows = read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length), payday = paydayOf(bRows);
 
-  // dates as UTC midnight, so day arithmetic is exact
-  const [Y, M, D] = today.split('-').map(Number);
-  const startIn = (y, mo) => new Date(Date.UTC(y, mo, Math.min(payday, new Date(Date.UTC(y, mo + 1, 0)).getUTCDate())));
-  let start = startIn(Y, M - 1);
-  if (Date.UTC(Y, M - 1, D) < start) start = startIn(Y, M - 2);
-  const next = startIn(start.getUTCFullYear(), start.getUTCMonth() + 1);
-  const str = d => d.toISOString().slice(0, 10), from = str(start), to = str(new Date(next - 864e5));
+  const { start, from, to, next } = periodOf(today, payday);
   const weekOf = ds => Math.min(3, Math.floor((Date.parse(ds) - start) / 6048e5));
 
   let income = 0, fixed = 0;
@@ -125,7 +131,7 @@ function summary() {
     else spent[k] += amt;
   }
   const cur = weekOf(today), round = n => Math.round(n * 100) / 100;
-  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total), nextPayday: str(next),
+  return { ok: true, date: today, week: cur + 1, weekLeft: round(allow[cur] - spent[cur]), weekAllowance: round(allow[cur]), monthLeft: round(free - total), nextPayday: next,
     from, to, spent: round(total), weeks: allow.map((a, i) => round(a - spent[i])),
     categories: Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([name, amount]) => ({ name: String(name), amount: round(amount) })) };
 }
@@ -149,6 +155,100 @@ function upsert(s, cols, ops, addType, delType, toRow) {
   if (changed) write(s, rows.filter((_, i) => !gone.has(i)), cols);
 }
 function round2(n) { return Math.round(n * 100) / 100; }
+
+// The pay period that contains the day ds ('yyyy-MM-dd'): from payday to the day before the next one.
+// Dates are handled as UTC midnight so day arithmetic is exact. start is a Date, the rest are strings.
+function periodOf(ds, payday) {
+  const [Y, M, D] = ds.split('-').map(Number);
+  const startIn = (y, mo) => new Date(Date.UTC(y, mo, Math.min(payday, new Date(Date.UTC(y, mo + 1, 0)).getUTCDate())));
+  let start = startIn(Y, M - 1);
+  if (Date.UTC(Y, M - 1, D) < start) start = startIn(Y, M - 2);
+  const next = startIn(start.getUTCFullYear(), start.getUTCMonth() + 1);
+  const str = d => d.toISOString().slice(0, 10);
+  return { start, from: str(start), to: str(new Date(next - 864e5)), next: str(next) };
+}
+
+// ---------- archive ----------
+// Saves every finished period that has data and hasn't been saved yet. Runs on each sync (cheap
+// when there's nothing to do). A failure never breaks syncing; it's retried on the next sync.
+function archiveSafe(ss) {
+  try { archive(ss); } catch (err) { console.error('archive failed: ' + err); }
+}
+function archive(ss) {
+  const props = PropertiesService.getScriptProperties();
+  const done = JSON.parse(props.getProperty('archived') || '[]');
+  const d = sheetData(ss);
+  const current = periodOf(d.today, d.payday).from;
+  const todo = new Set();
+  for (const r of d.pRows.concat(d.iRows)) {
+    const from = periodOf(r[1], d.payday).from;
+    if (from < current && !done.includes(from)) todo.add(from);
+  }
+  for (const from of [...todo].sort()) {
+    const p = periodOf(from, d.payday);
+    savePeriod(d, p, `Weekly ${p.from} – ${p.to}`);
+    done.push(from);
+    props.setProperty('archived', JSON.stringify(done));
+  }
+}
+// Run this once from the Apps Script editor (pick testArchive next to "Debug", then Run) to grant the
+// Drive permission and check that archiving works. It saves the current period as a TEST copy in the
+// "Weekly archive" folder; you can delete that copy afterwards.
+function testArchive() {
+  const d = sheetData(SpreadsheetApp.getActive()), p = periodOf(d.today, d.payday);
+  savePeriod(d, p, `Weekly TEST ${p.from} – ${p.to} (safe to delete)`);
+}
+function sheetData(ss) {
+  const tz = ss.getSpreadsheetTimeZone();
+  const bRows = read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length);
+  return {
+    today: Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), payday: paydayOf(bRows), bRows,
+    pRows: read(sheet(ss, PURCHASES, P_HEAD), P_HEAD.length).map(r => (r[1] = day(r[1], tz), r)),
+    iRows: read(sheet(ss, INVEST, I_HEAD), I_HEAD.length).map(r => (r[1] = day(r[1], tz), r)),
+  };
+}
+function savePeriod(d, p, title) {
+  const inP = r => r[1] >= p.from && r[1] <= p.to;
+  saveCopy(title, [
+    [PURCHASES, [P_HEAD].concat(d.pRows.filter(inP))],
+    [INVEST, [I_HEAD].concat(d.iRows.filter(inP))],
+    [BUDGET, [B_HEAD].concat(d.bRows)],
+  ]);
+}
+// Creates a spreadsheet in the archive folder with one tab per [name, rows]. Uses the Drive and
+// Sheets APIs directly, so the script only needs access to files it created itself.
+function saveCopy(title, tabs) {
+  const file = api('post', 'https://www.googleapis.com/drive/v3/files',
+    { name: title, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [archiveFolder()] });
+  const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + file.id;
+  const first = api('get', base + '?fields=sheets.properties.sheetId').sheets[0].properties.sheetId;
+  api('post', base + ':batchUpdate', { requests: tabs.map(([name], i) => i === 0
+    ? { updateSheetProperties: { properties: { sheetId: first, title: name, gridProperties: { frozenRowCount: 1 } }, fields: 'title,gridProperties.frozenRowCount' } }
+    : { addSheet: { properties: { title: name, gridProperties: { frozenRowCount: 1 } } } }) });
+  api('post', base + '/values:batchUpdate', {
+    valueInputOption: 'USER_ENTERED',
+    data: tabs.map(([name, rows]) => ({ range: `'${name}'!A1`, values: rows.map(r => r.map(v => typeof v === 'string' ? text(v) : v)) })),
+  });
+}
+function archiveFolder() {
+  const props = PropertiesService.getScriptProperties();
+  let id = props.getProperty('archiveFolder');
+  if (id) {
+    try { if (!api('get', `https://www.googleapis.com/drive/v3/files/${id}?fields=trashed`).trashed) return id; } catch (err) {}
+  }
+  id = api('post', 'https://www.googleapis.com/drive/v3/files', { name: 'Weekly archive', mimeType: 'application/vnd.google-apps.folder' }).id;
+  props.setProperty('archiveFolder', id);
+  return id;
+}
+function api(method, url, body) {
+  const res = UrlFetchApp.fetch(url, {
+    method, contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.getResponseCode() >= 300) throw new Error(`${method} ${url} → ${res.getResponseCode()}: ${res.getContentText().slice(0, 300)}`);
+  return JSON.parse(res.getContentText() || '{}');
+}
 
 function paydayOf(bRows) {
   const r = bRows.find(r => r[0] === 'setting' && r[1] === 'Payday');
