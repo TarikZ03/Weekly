@@ -9,7 +9,9 @@ const KEY = 'CHANGE-ME';  // replace with your own long random text, and enter t
 
 const PURCHASES = 'Purchases', BUDGET = 'Budget';
 const P_HEAD = ['id', 'date', 'name', 'category', 'amount', 'spread', 'added'];
-const B_HEAD = ['type', 'name', 'amount'];
+const B_HEAD = ['type', 'name', 'amount', 'frequency', 'per month'];
+const PER_MONTH = { weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12 };
+const perMonth = (amount, freq) => Math.round((Number(amount) || 0) * (PER_MONTH[freq] || 1) * 100) / 100;
 
 // Receives a batch of changes from the app: { key, ops: [{type:'add', p}, {type:'del', id}, {type:'budget', income, bills}] }
 // and answers with everything in the sheet: { ok, purchases, hasBudget, income, bills }.
@@ -44,8 +46,11 @@ function doPost(e) {
       }
       write(P, rows.filter((_, i) => !gone.has(i)), P_HEAD.length);
       if (budget) {
-        write(B, [['income', 'Monthly income', Number(budget.income) || 0]]
-          .concat((budget.bills || []).map(b => ['expense', text(b.name), Number(b.amount) || 0])), B_HEAD.length);
+        const inc = Number(budget.income) || 0;
+        write(B, [['income', 'Monthly income', inc, 'monthly', inc]].concat((budget.bills || []).map(b => {
+          const freq = PER_MONTH[b.freq] ? b.freq : 'monthly';
+          return ['expense', text(b.name), Number(b.amount) || 0, freq, perMonth(b.amount, freq)];
+        })), B_HEAD.length);
       }
     }
 
@@ -56,7 +61,7 @@ function doPost(e) {
     }));
     const bRows = read(B, B_HEAD.length);
     const inc = bRows.find(r => r[0] === 'income');
-    const bills = bRows.filter(r => r[0] === 'expense').map(r => ({ name: String(r[1]), amount: Number(r[2]) || 0 }));
+    const bills = bRows.filter(r => r[0] === 'expense').map(r => ({ name: String(r[1]), amount: Number(r[2]) || 0, freq: PER_MONTH[r[3]] ? String(r[3]) : 'monthly' }));
     return out({ ok: true, purchases, hasBudget: bRows.length > 0, income: inc ? Number(inc[2]) || 0 : 0, bills });
   } finally {
     lock.releaseLock();
@@ -69,7 +74,7 @@ function doGet(e) {
   return out(summary());
 }
 
-// Same rules as the app: (income - expenses) / 4 per week; weeks are days 1-7, 8-14, 15-21, 22-end;
+// Same rules as the app: (income - expenses per month) / 4 per week; weeks are days 1-7, 8-14, 15-21, 22-end;
 // a spread purchase is split evenly over its own week and the weeks after it.
 function summary() {
   const ss = SpreadsheetApp.getActive(), tz = ss.getSpreadsheetTimeZone();
@@ -77,8 +82,8 @@ function summary() {
   const weekOf = ds => Math.min(3, Math.floor((Number(ds.slice(8, 10)) - 1) / 7));
 
   let income = 0, fixed = 0;
-  for (const [type, , amount] of read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length)) {
-    if (type === 'income') income = Number(amount) || 0; else fixed += Number(amount) || 0;
+  for (const [type, , amount, freq] of read(sheet(ss, BUDGET, B_HEAD), B_HEAD.length)) {
+    if (type === 'income') income = Number(amount) || 0; else fixed += perMonth(amount, freq);
   }
   const free = income - fixed, allow = [1, 2, 3, 4].map(() => free / 4), spent = [0, 0, 0, 0];
   let total = 0;
